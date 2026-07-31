@@ -8,3 +8,7 @@ logs/
 sessions/ 
 logs/ 
 package-lock.json 
+node_modules/ 
+.env 
+sessions/ 
+logs/ 
