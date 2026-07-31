@@ -7,7 +7,6 @@ class WarmupService {
   constructor() {
     this.activeWarmups = new Map();
     this.messageTemplates = conversations;
-    this.isRunning = false;
   }
 
   async startWarmup(phoneNumber) {
@@ -18,7 +17,7 @@ class WarmupService {
         return;
       }
 
-      // Получаем другие аккаунты для общения
+      // Получаем ВСЕ активные аккаунты для общения (кроме себя)
       const otherAccounts = await WhatsAppAccountModel.getActiveAccounts();
       const partners = otherAccounts.filter(a => a.phone_number !== phoneNumber);
 
@@ -30,32 +29,31 @@ class WarmupService {
       const warmupTime = account.warmup_time || 6;
       const warmupType = account.warmup_type || 'human';
       
-      // Рассчитываем интервалы
       const messagesPerHour = this.getMessagesPerHour(warmupType);
       const totalMessages = messagesPerHour * warmupTime;
       const interval = (warmupTime * 3600000) / totalMessages;
 
-      // Запускаем прогрев
+      // СОХРАНЯЕМ ВСЕХ ПАРТНЕРОВ
       this.activeWarmups.set(phoneNumber, {
         account,
-        partners,
+        partners,  // ← ВСЕ аккаунты, кроме себя
         totalMessages,
         messagesSent: 0,
         interval,
         timer: null,
         isRunning: true,
         startTime: Date.now(),
-        warmupType
+        warmupType,
+        partnerIndex: 0
       });
 
-      logger.info(`Starting warmup for ${phoneNumber}: ${totalMessages} messages over ${warmupTime}h`);
+      logger.info(`Starting warmup for ${phoneNumber}: ${totalMessages} messages over ${warmupTime}h with ${partners.length} partners`);
       
       // Первое сообщение с задержкой
       setTimeout(() => {
         this.runWarmupLoop(phoneNumber);
       }, 30000 + Math.random() * 60000);
 
-      // Обновляем статус
       await WhatsAppAccountModel.updateStatus(phoneNumber, 'warming');
 
     } catch (error) {
@@ -74,13 +72,13 @@ class WarmupService {
       await WhatsAppAccountModel.updateStatus(phoneNumber, 'warmed');
       this.activeWarmups.delete(phoneNumber);
       
-      // Уведомляем пользователя
       const bot = require('../bot');
       const account = await WhatsAppAccountModel.findByPhone(phoneNumber);
       if (account) {
         await bot.sendMessage(account.user_telegram_id,
           `🔥 *Прогрев завершен для номера:* \`${phoneNumber}\`\n\n` +
           `📊 Отправлено: ${warmup.messagesSent} сообщений\n` +
+          `👥 Партнеров: ${warmup.partners.length}\n` +
           `⏱️ Время: ${Math.round((Date.now() - warmup.startTime) / 60000)} минут\n\n` +
           `✅ Аккаунт готов к работе!`
         );
@@ -89,11 +87,12 @@ class WarmupService {
     }
 
     try {
-      // Выбираем случайного партнера
-      const partner = warmup.partners[Math.floor(Math.random() * warmup.partners.length)];
+      // ВЫБИРАЕМ СЛЕДУЮЩЕГО ПАРТНЕРА (циклически)
+      const partner = warmup.partners[warmup.partnerIndex % warmup.partners.length];
+      warmup.partnerIndex++;
       
       // Выбираем шаблон сообщения
-      const template = this.getRandomMessage(warmup.account.phone_number, partner.phone_number);
+      const template = this.getRandomMessage();
       
       // Отправляем сообщение
       await this.sendMessage(warmup.account.phone_number, partner.phone_number, template);
@@ -105,7 +104,6 @@ class WarmupService {
       if (warmup.messagesSent % Math.round(warmup.totalMessages / 10) === 0) {
         logger.info(`📊 Warmup ${phoneNumber}: ${warmup.messagesSent}/${warmup.totalMessages} (${progress.toFixed(1)}%)`);
         
-        // Уведомляем пользователя о прогрессе
         const bot = require('../bot');
         const account = await WhatsAppAccountModel.findByPhone(phoneNumber);
         if (account) {
@@ -113,6 +111,7 @@ class WarmupService {
             `📊 *Прогресс прогрева*\n\n` +
             `📱 Номер: \`${phoneNumber}\`\n` +
             `📨 Отправлено: ${warmup.messagesSent}/${warmup.totalMessages}\n` +
+            `👥 Партнеров: ${warmup.partners.length}\n` +
             `📈 Прогресс: ${progress.toFixed(1)}%\n` +
             `⏱️ Осталось: ~${Math.round((warmup.totalMessages - warmup.messagesSent) * warmup.interval / 3600000)} часов`
           );
@@ -135,8 +134,8 @@ class WarmupService {
       const manager = require('./manager');
       const fromSession = manager.getSession(from);
       
-      if (!fromSession) {
-        logger.error(`Session not found for ${from}`);
+      if (!fromSession || !fromSession.connected) {
+        logger.error(`Session not found or not connected for ${from}`);
         return;
       }
 
@@ -147,7 +146,7 @@ class WarmupService {
       await this.sleep(2000 + Math.random() * 8000);
       
       // Отправка сообщения
-      const sentMessage = await fromSession.sock.sendMessage(toJid, { 
+      await fromSession.sock.sendMessage(toJid, { 
         text: message
       });
 
@@ -158,28 +157,16 @@ class WarmupService {
         [from, to, message]
       );
 
-      // Обновляем статистику
       await WhatsAppAccountModel.updateStats(from, 1, 0);
-
       logger.debug(`Message sent from ${from} to ${to}`);
 
     } catch (error) {
       logger.error(`Failed to send message from ${from} to ${to}:`, error);
-      
-      // Если ошибка, пробуем переподключиться
-      if (error.message.includes('logged out')) {
-        const manager = require('./manager');
-        const account = await WhatsAppAccountModel.findByPhone(from);
-        if (account) {
-          await manager.initializeSession(from, account.user_telegram_id);
-        }
-      }
     }
   }
 
   getDelay(warmup) {
     const baseDelay = warmup.interval;
-    // Добавляем случайность ±40%
     const jitter = 0.6 + Math.random() * 0.8;
     return baseDelay * jitter;
   }
@@ -193,31 +180,24 @@ class WarmupService {
     return speeds[type] || 5;
   }
 
-  getRandomMessage(from, to) {
+  getRandomMessage() {
     const templates = this.messageTemplates;
-    let template = templates[Math.floor(Math.random() * templates.length)];
-    
-    // Заменяем плейсхолдеры
-    const names = ['Анна', 'Борис', 'Виктор', 'Галина', 'Дмитрий', 'Елена', 'Иван', 'Ксения', 'Леонид', 'Мария'];
-    template = template.replace(/{name}/g, names[Math.floor(Math.random() * names.length)]);
-    
-    return template;
+    return templates[Math.floor(Math.random() * templates.length)];
   }
 
   async handleIncomingMessage(phoneNumber, text, messageKey) {
+    // Обработка входящих сообщений
     try {
       const warmup = this.activeWarmups.get(phoneNumber);
       if (!warmup || !warmup.isRunning) return;
 
-      // Генерируем ответ с задержкой
       const delay = 5000 + Math.random() * 15000;
       
       setTimeout(async () => {
-        // Получаем отправителя
         const fromJid = messageKey.remoteJid;
         const fromNumber = fromJid.replace('@s.whatsapp.net', '');
         
-        // Проверяем, что это один из партнеров
+        // Проверяем, что отправитель - один из партнеров
         if (warmup.partners.some(p => p.phone_number === fromNumber)) {
           const response = this.generateResponse(text);
           await this.sendMessage(phoneNumber, fromNumber, response);
@@ -238,7 +218,13 @@ class WarmupService {
       'Интересно, расскажи подробнее',
       'Хорошо, договорились!',
       'Отлично, рад слышать!',
-      'Спасибо, что написал(а)'
+      'Спасибо, что написал(а)',
+      '👍',
+      '😊',
+      'Класс!',
+      'Супер!',
+      'Ок!',
+      'Понял!'
     ];
     return responses[Math.floor(Math.random() * responses.length)];
   }
@@ -265,6 +251,7 @@ class WarmupService {
       totalMessages: warmup.totalMessages,
       messagesSent: warmup.messagesSent,
       progress: (warmup.messagesSent / warmup.totalMessages) * 100,
+      partners: warmup.partners.length,
       isRunning: warmup.isRunning
     };
   }
