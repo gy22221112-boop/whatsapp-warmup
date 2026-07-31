@@ -771,6 +771,7 @@ async function showWarmupSettings(chatId) {
   }
 }
 
+// ---- УСТАНОВКА ВРЕМЕНИ ----
 async function setWarmupTime(chatId, hours) {
   const accounts = await WhatsAppAccountModel.findByUser(chatId);
   if (accounts.length > 0) {
@@ -797,6 +798,7 @@ async function setWarmupTime(chatId, hours) {
   );
 }
 
+// ---- УСТАНОВКА ТИПА ----
 async function setWarmupType(chatId, type) {
   const typeLabels = {
     'slow': '🐢 Медленно',
