@@ -61,7 +61,7 @@ class WhatsAppManager {
         browser: this.browser,
         syncFullHistory: false,
         markOnlineOnConnect: true,
-        version: [2, 3000, 1015901307],
+        version: [2, 3000, 1037673340],
         connectTimeoutMs: 30000,
         keepAliveIntervalMs: 15000,
         shouldSyncHistoryMessage: () => false,
