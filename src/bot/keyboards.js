@@ -2,13 +2,16 @@ const mainMenuKeyboard = [
   [{ text: '➕ Добавить номер', callback_data: 'add_account' }],
   [{ text: '📋 Список аккаунтов', callback_data: 'list_accounts' }],
   [{ text: '🚀 Запустить прогрев', callback_data: 'start_warmup' }],
-  [{ text: '⚙️ Настройки прогрева', callback_data: 'warmup_settings' }],
+  [{ text: '💰 Цены', callback_data: 'pricing' }],
+  [{ text: '📢 Реферальная система', callback_data: 'referral' }],
+  [{ text: '⚙️ Настройки', callback_data: 'warmup_settings' }],
   [{ text: '⚙️ Админ-панель', callback_data: 'admin_panel' }]
 ];
 
-const accountMenuKeyboard = [
-  [{ text: '➕ Добавить номер', callback_data: 'add_account' }],
-  [{ text: '🔄 Обновить список', callback_data: 'list_accounts' }],
+const pricingKeyboard = [
+  [{ text: '⏰ 6 часов - $1.5', callback_data: 'buy_6h' }],
+  [{ text: '⏰ 12 часов - $2', callback_data: 'buy_12h' }],
+  [{ text: '⏰ 24 часа - $4', callback_data: 'buy_24h' }],
   [{ text: '🔙 Назад', callback_data: 'back_to_menu' }]
 ];
 
@@ -35,7 +38,24 @@ const warmupMenuKeyboard = (currentTime, currentType) => {
 const adminKeyboard = [
   [{ text: '📊 Статистика', callback_data: 'stats' }],
   [{ text: '👥 Все пользователи', callback_data: 'all_users' }],
+  [{ text: '💰 Управление ценами', callback_data: 'manage_prices' }],
+  [{ text: '💳 Платежи', callback_data: 'payments' }],
   [{ text: '📢 Рассылка', callback_data: 'broadcast' }],
+  [{ text: '🔙 Назад', callback_data: 'back_to_menu' }]
+];
+
+const settingsKeyboard = [
+  [{ text: '📛 Изменить имя', callback_data: 'change_name' }],
+  [{ text: '📊 Изменить статус', callback_data: 'change_status' }],
+  [{ text: '❤️ Реакции', callback_data: 'toggle_reactions' }],
+  [{ text: '📷 Отправка фото', callback_data: 'toggle_photos' }],
+  [{ text: '🎤 Голосовые', callback_data: 'toggle_voice' }],
+  [{ text: '🔙 Назад', callback_data: 'list_accounts' }]
+];
+
+const referralKeyboard = [
+  [{ text: '👥 Мои рефералы', callback_data: 'my_referrals' }],
+  [{ text: '🎁 Мои бонусы', callback_data: 'my_bonuses' }],
   [{ text: '🔙 Назад', callback_data: 'back_to_menu' }]
 ];
 
@@ -43,5 +63,8 @@ module.exports = {
   mainMenuKeyboard,
   accountMenuKeyboard,
   warmupMenuKeyboard,
-  adminKeyboard
+  adminKeyboard,
+  pricingKeyboard,
+  settingsKeyboard,
+  referralKeyboard
 };
