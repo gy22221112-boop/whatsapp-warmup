@@ -54,147 +54,166 @@ bot.on('callback_query', async (callbackQuery) => {
   await bot.answerCallbackQuery(callbackQuery.id);
 
   try {
-    switch (data) {
-      // ========== ДОБАВЛЕНИЕ НОМЕРА ==========
-      case 'add_account':
-        await bot.sendMessage(chatId,
-          '📱 *Добавление номера WhatsApp*\n\n' +
-          'Введите номер телефона в одном из форматов:\n' +
-          '• `+79123456789`\n' +
-          '• `79123456789`\n' +
-          '• `89123456789`\n\n' +
-          'Выберите способ подключения:',
+    // ============================================
+    // ОБРАБОТКА ВСЕХ КОМАНД
+    // ============================================
+
+    // ---------- ДОБАВЛЕНИЕ НОМЕРА ----------
+    if (data === 'add_account') {
+      await bot.sendMessage(chatId,
+        '📱 *Добавление номера WhatsApp*\n\n' +
+        'Введите номер телефона в одном из форматов:\n' +
+        '• `+79123456789`\n' +
+        '• `79123456789`\n' +
+        '• `89123456789`\n\n' +
+        'Выберите способ подключения:',
+        {
+          parse_mode: 'Markdown',
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: '📱 QR код', callback_data: 'qr_method' }],
+              [{ text: '🔑 8-значный код', callback_data: 'code_method' }],
+              [{ text: '🔙 Назад', callback_data: 'back_to_menu' }]
+            ]
+          }
+        }
+      );
+      return;
+    }
+
+    if (data === 'qr_method') {
+      await bot.sendMessage(chatId,
+        '📱 *Отправьте номер для QR кода:*',
+        { parse_mode: 'Markdown' }
+      );
+      return;
+    }
+
+    if (data === 'code_method') {
+      await bot.sendMessage(chatId,
+        '🔑 *Отправьте номер для 8-значного кода:*',
+        { parse_mode: 'Markdown' }
+      );
+      return;
+    }
+
+    // ---------- СПИСОК АККАУНТОВ ----------
+    if (data === 'list_accounts') {
+      await showAccounts(chatId);
+      return;
+    }
+
+    // ---------- ЗАПУСК ПРОГРЕВА ----------
+    if (data === 'start_warmup') {
+      await startWarmup(chatId);
+      return;
+    }
+
+    // ---------- СТАТИСТИКА ПРОГРЕВА ----------
+    if (data === 'warmup_stats') {
+      await showWarmupStats(chatId);
+      return;
+    }
+
+    // ---------- НАСТРОЙКИ ----------
+    if (data === 'warmup_settings') {
+      await showWarmupSettings(chatId);
+      return;
+    }
+
+    // ---------- АДМИН-ПАНЕЛЬ ----------
+    if (data === 'admin_panel') {
+      await showAdminPanel(chatId);
+      return;
+    }
+
+    // ---------- НАЗАД В МЕНЮ ----------
+    if (data === 'back_to_menu') {
+      try {
+        await bot.editMessageText(
+          '👋 *Главное меню*\n\nВыберите действие:',
           {
+            chat_id: chatId,
+            message_id: messageId,
             parse_mode: 'Markdown',
             reply_markup: {
-              inline_keyboard: [
-                [{ text: '📱 QR код', callback_data: 'qr_method' }],
-                [{ text: '🔑 8-значный код', callback_data: 'code_method' }],
-                [{ text: '🔙 Назад', callback_data: 'back_to_menu' }]
-              ]
+              inline_keyboard: mainMenuKeyboard
             }
           }
         );
-        break;
-
-      case 'qr_method':
-        await bot.sendMessage(chatId,
-          '📱 *Отправьте номер для QR кода:*',
-          { parse_mode: 'Markdown' }
-        );
-        break;
-
-      case 'code_method':
-        await bot.sendMessage(chatId,
-          '🔑 *Отправьте номер для 8-значного кода:*',
-          { parse_mode: 'Markdown' }
-        );
-        break;
-
-      // ========== СПИСОК АККАУНТОВ ==========
-      case 'list_accounts':
-        await showAccounts(chatId);
-        break;
-
-      // ========== ЗАПУСК ПРОГРЕВА ==========
-      case 'start_warmup':
-        await startWarmup(chatId);
-        break;
-
-      // ========== СТАТИСТИКА ПРОГРЕВА ==========  // <-- ДОБАВЛЕНО
-      case 'warmup_stats':
-        await showWarmupStats(chatId);
-        break;
-
-      // ========== НАСТРОЙКИ ==========
-      case 'warmup_settings':
-        await showWarmupSettings(chatId);
-        break;
-
-      // ========== АДМИН-ПАНЕЛЬ ==========
-      case 'admin_panel':
-        await showAdminPanel(chatId);
-        break;
-
-      // ========== НАЗАД В МЕНЮ ==========
-      case 'back_to_menu':
-        try {
-          await bot.editMessageText(
+      } catch (error) {
+        if (!error.message.includes('message is not modified')) {
+          await bot.sendMessage(chatId,
             '👋 *Главное меню*\n\nВыберите действие:',
             {
-              chat_id: chatId,
-              message_id: messageId,
               parse_mode: 'Markdown',
               reply_markup: {
                 inline_keyboard: mainMenuKeyboard
               }
             }
           );
-        } catch (error) {
-          if (!error.message.includes('message is not modified')) {
-            await bot.sendMessage(chatId,
-              '👋 *Главное меню*\n\nВыберите действие:',
-              {
-                parse_mode: 'Markdown',
-                reply_markup: {
-                  inline_keyboard: mainMenuKeyboard
-                }
-              }
-            );
-          }
         }
-        break;
-
-      // ========== ВЫБОР ВРЕМЕНИ ДЛЯ ПРОГРЕВА ==========
-      case data.startsWith('warmup_'):
-        const hours = parseInt(data.replace('warmup_', ''));
-        await executeWarmup(chatId, hours);
-        break;
-
-      // ========== УДАЛЕНИЕ АККАУНТА ==========
-      case data.startsWith('delete_'):
-        const phoneToDelete = data.replace('delete_', '');
-        await deleteAccount(chatId, phoneToDelete);
-        break;
-
-      // ========== НАСТРОЙКА ВРЕМЕНИ ==========
-      case data.startsWith('set_time_'):
-        const time = parseInt(data.replace('set_time_', ''));
-        await setWarmupTime(chatId, time);
-        break;
-
-      // ========== НАСТРОЙКА ТИПА ==========
-      case data.startsWith('set_type_'):
-        const type = data.replace('set_type_', '');
-        await setWarmupType(chatId, type);
-        break;
-
-      // ========== ПОЛУЧЕНИЕ 8-ЗНАЧНОГО КОДА ==========
-      case data.startsWith('get_code_'):
-        const phoneCode = data.replace('get_code_', '');
-        await getPairingCode(chatId, phoneCode);
-        break;
-
-      // ========== ОБНОВЛЕНИЕ QR ==========
-      case data.startsWith('refresh_qr_'):
-        const phoneRefresh = data.replace('refresh_qr_', '');
-        await bot.sendMessage(chatId, `🔄 Обновляю QR код для ${phoneRefresh}...`);
-        const success = await whatsappManager.refreshQRCode(phoneRefresh, chatId);
-        if (!success) {
-          await bot.sendMessage(chatId, `❌ Не удалось обновить QR код.`);
-        }
-        break;
-
-      // ========== ОТМЕНА QR ==========
-      case data.startsWith('cancel_qr_'):
-        const phoneCancel = data.replace('cancel_qr_', '');
-        await whatsappManager.disconnect(phoneCancel);
-        await bot.sendMessage(chatId, `❌ Подключение для ${phoneCancel} отменено`);
-        break;
-
-      default:
-        await bot.sendMessage(chatId, '❓ Неизвестная команда');
+      }
+      return;
     }
+
+    // ---------- ВЫБОР ВРЕМЕНИ ДЛЯ ПРОГРЕВА ----------
+    if (data.startsWith('warmup_')) {
+      const hours = parseInt(data.replace('warmup_', ''));
+      await executeWarmup(chatId, hours);
+      return;
+    }
+
+    // ---------- УДАЛЕНИЕ АККАУНТА ----------
+    if (data.startsWith('delete_')) {
+      const phoneToDelete = data.replace('delete_', '');
+      await deleteAccount(chatId, phoneToDelete);
+      return;
+    }
+
+    // ---------- НАСТРОЙКА ВРЕМЕНИ ----------
+    if (data.startsWith('set_time_')) {
+      const time = parseInt(data.replace('set_time_', ''));
+      await setWarmupTime(chatId, time);
+      return;
+    }
+
+    // ---------- НАСТРОЙКА ТИПА ----------
+    if (data.startsWith('set_type_')) {
+      const type = data.replace('set_type_', '');
+      await setWarmupType(chatId, type);
+      return;
+    }
+
+    // ---------- ПОЛУЧЕНИЕ 8-ЗНАЧНОГО КОДА ----------
+    if (data.startsWith('get_code_')) {
+      const phoneCode = data.replace('get_code_', '');
+      await getPairingCode(chatId, phoneCode);
+      return;
+    }
+
+    // ---------- ОБНОВЛЕНИЕ QR ----------
+    if (data.startsWith('refresh_qr_')) {
+      const phoneRefresh = data.replace('refresh_qr_', '');
+      await bot.sendMessage(chatId, `🔄 Обновляю QR код для ${phoneRefresh}...`);
+      const success = await whatsappManager.refreshQRCode(phoneRefresh, chatId);
+      if (!success) {
+        await bot.sendMessage(chatId, `❌ Не удалось обновить QR код.`);
+      }
+      return;
+    }
+
+    // ---------- ОТМЕНА QR ----------
+    if (data.startsWith('cancel_qr_')) {
+      const phoneCancel = data.replace('cancel_qr_', '');
+      await whatsappManager.disconnect(phoneCancel);
+      await bot.sendMessage(chatId, `❌ Подключение для ${phoneCancel} отменено`);
+      return;
+    }
+
+    // ---------- НЕИЗВЕСТНАЯ КОМАНДА ----------
+    await bot.sendMessage(chatId, '❓ Неизвестная команда');
+
   } catch (error) {
     logger.error('Callback error:', error);
     await bot.sendMessage(chatId, `❌ Ошибка: ${error.message}`);
@@ -220,7 +239,7 @@ bot.on('message', async (msg) => {
 // АДМИНСКИЕ КОМАНДЫ
 // ============================================
 
-// /clean - очистка сессий
+// ---------- /clean - очистка сессий ----------
 bot.onText(/\/clean/, async (msg) => {
   const chatId = msg.chat.id;
   
@@ -275,7 +294,7 @@ bot.onText(/\/clean/, async (msg) => {
   }
 });
 
-// /cleandb - очистка базы
+// ---------- /cleandb - очистка базы ----------
 bot.onText(/\/cleandb/, async (msg) => {
   const chatId = msg.chat.id;
   
@@ -311,7 +330,7 @@ bot.onText(/\/cleandb/, async (msg) => {
   }
 });
 
-// /restart - перезагрузка
+// ---------- /restart - перезагрузка ----------
 bot.onText(/\/restart/, async (msg) => {
   const chatId = msg.chat.id;
   
@@ -345,7 +364,7 @@ bot.onText(/\/restart/, async (msg) => {
   }
 });
 
-// /status - статус сессий
+// ---------- /status - статус сессий ----------
 bot.onText(/\/status/, async (msg) => {
   const chatId = msg.chat.id;
   
@@ -391,7 +410,7 @@ bot.onText(/\/status/, async (msg) => {
 // ФУНКЦИИ ОБРАБОТЧИКИ
 // ============================================
 
-// ---- ДОБАВЛЕНИЕ НОМЕРА ----
+// ---------- ДОБАВЛЕНИЕ НОМЕРА ----------
 async function addPhoneNumber(chatId, phoneNumber) {
   try {
     const formatted = formatPhoneNumber(phoneNumber);
@@ -454,7 +473,7 @@ async function addPhoneNumber(chatId, phoneNumber) {
   }
 }
 
-// ---- ПОЛУЧЕНИЕ 8-ЗНАЧНОГО КОДА ----
+// ---------- ПОЛУЧЕНИЕ 8-ЗНАЧНОГО КОДА ----------
 async function getPairingCode(chatId, phoneNumber) {
   try {
     await bot.sendMessage(chatId, `🔄 Получаю код для ${phoneNumber}...`);
@@ -485,7 +504,7 @@ async function getPairingCode(chatId, phoneNumber) {
   }
 }
 
-// ---- СПИСОК АККАУНТОВ ----
+// ---------- СПИСОК АККАУНТОВ ----------
 async function showAccounts(chatId) {
   try {
     const accounts = await WhatsAppAccountModel.findByUser(chatId);
@@ -555,7 +574,7 @@ async function showAccounts(chatId) {
   }
 }
 
-// ---- УДАЛЕНИЕ АККАУНТА ----
+// ---------- УДАЛЕНИЕ АККАУНТА ----------
 async function deleteAccount(chatId, phoneNumber) {
   try {
     await whatsappManager.disconnect(phoneNumber);
@@ -570,7 +589,7 @@ async function deleteAccount(chatId, phoneNumber) {
   }
 }
 
-// ---- ЗАПУСК ПРОГРЕВА ----
+// ---------- ЗАПУСК ПРОГРЕВА ----------
 async function startWarmup(chatId) {
   try {
     const accounts = await WhatsAppAccountModel.findByUser(chatId);
@@ -596,7 +615,6 @@ async function startWarmup(chatId) {
       return;
     }
 
-    // Показываем выбор времени
     await bot.sendMessage(chatId,
       `🚀 *Запуск прогрева*\n\n` +
       `📱 Аккаунтов: ${connectedAccounts.length}\n` +
@@ -620,13 +638,12 @@ async function startWarmup(chatId) {
   }
 }
 
-// ---- ЗАПУСК ПРОГРЕВА С ВЫБРАННЫМ ВРЕМЕНЕМ ----
+// ---------- ЗАПУСК ПРОГРЕВА С ВЫБРАННЫМ ВРЕМЕНЕМ ----------
 async function executeWarmup(chatId, hours) {
   try {
     const accounts = await WhatsAppAccountModel.findByUser(chatId);
     const connectedAccounts = accounts.filter(a => a.status === 'connected');
 
-    // Обновляем настройки для всех аккаунтов
     for (const account of connectedAccounts) {
       await WhatsAppAccountModel.updateWarmupSettings(
         account.phone_number, 
@@ -635,7 +652,6 @@ async function executeWarmup(chatId, hours) {
       );
     }
 
-    // Запускаем прогревы вручную через менеджер
     let started = 0;
     for (const account of connectedAccounts) {
       try {
@@ -673,7 +689,7 @@ async function executeWarmup(chatId, hours) {
   }
 }
 
-// ---- СТАТИСТИКА ПРОГРЕВА ----
+// ---------- СТАТИСТИКА ПРОГРЕВА ----------
 async function showWarmupStats(chatId) {
   try {
     const accounts = await WhatsAppAccountModel.findByUser(chatId);
@@ -740,7 +756,7 @@ async function showWarmupStats(chatId) {
   }
 }
 
-// ---- НАСТРОЙКИ ПРОГРЕВА ----
+// ---------- НАСТРОЙКИ ПРОГРЕВА ----------
 async function showWarmupSettings(chatId) {
   try {
     const accounts = await WhatsAppAccountModel.findByUser(chatId);
@@ -771,7 +787,7 @@ async function showWarmupSettings(chatId) {
   }
 }
 
-// ---- УСТАНОВКА ВРЕМЕНИ ----
+// ---------- УСТАНОВКА ВРЕМЕНИ ----------
 async function setWarmupTime(chatId, hours) {
   const accounts = await WhatsAppAccountModel.findByUser(chatId);
   if (accounts.length > 0) {
@@ -798,7 +814,7 @@ async function setWarmupTime(chatId, hours) {
   );
 }
 
-// ---- УСТАНОВКА ТИПА ----
+// ---------- УСТАНОВКА ТИПА ----------
 async function setWarmupType(chatId, type) {
   const typeLabels = {
     'slow': '🐢 Медленно',
@@ -831,7 +847,7 @@ async function setWarmupType(chatId, type) {
   );
 }
 
-// ---- АДМИН-ПАНЕЛЬ ----
+// ---------- АДМИН-ПАНЕЛЬ ----------
 async function showAdminPanel(chatId) {
   const user = await UserModel.findByTelegramId(chatId);
   if (!user?.is_admin) {
