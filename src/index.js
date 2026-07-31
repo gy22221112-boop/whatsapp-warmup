@@ -1,69 +1,118 @@
 require('dotenv').config();
 const { logger } = require('./utils/logger');
 const { initDatabase } = require('./database');
-const whatsappManager = require('./whatsapp/manager');
 const webhookServer = require('./webhook/server');
+const { pool } = require('./database');
+
+// ============================================
+// ГЛОБАЛЬНАЯ ОБРАБОТКА ОШИБОК
+// ============================================
+
+process.on('unhandledRejection', (error) => {
+  console.error('❌ Unhandled rejection:', error);
+  console.error('Stack:', error.stack);
+});
+
+process.on('uncaughtException', (error) => {
+  console.error('❌ Uncaught exception:', error);
+  console.error('Stack:', error.stack);
+  setTimeout(() => process.exit(1), 1000);
+});
+
+// ============================================
+// ОСНОВНАЯ ФУНКЦИЯ
+// ============================================
 
 async function start() {
   try {
-    logger.info('🚀 Starting WhatsApp Warmup Service...');
+    console.log('🚀 Starting WhatsApp Warmup Service...');
+    console.log(`📅 Started at: ${new Date().toISOString()}`);
+    console.log(`🖥️ Node version: ${process.version}`);
+    console.log(`📦 NODE_ENV: ${process.env.NODE_ENV || 'development'}`);
+    
+    // Проверка переменных окружения
+    const required = ['TELEGRAM_BOT_TOKEN', 'DATABASE_URL'];
+    const missing = required.filter(key => !process.env[key]);
+    
+    if (missing.length > 0) {
+      console.warn(`⚠️ Missing environment variables: ${missing.join(', ')}`);
+    }
     
     // Инициализация базы данных
-    await initDatabase();
-    logger.info('✅ Database initialized');
-    
-    // Запуск webhook сервера
-    await webhookServer.start();
-    logger.info('✅ Webhook server started');
-    
-    // Запуск WhatsApp менеджера с задержкой
-    setTimeout(async () => {
-      await whatsappManager.startAllSessions();
-      logger.info('✅ WhatsApp sessions started');
-    }, 5000);
-    
-    logger.info('🎯 Service is running!');
+    console.log('📊 Initializing database...');
+    try {
+      await initDatabase();
+      console.log('✅ Database initialized');
+    } catch (dbError) {
+      console.error('❌ Database init failed:', dbError.message);
+      throw dbError;
+    }
     
     // Проверка подключения к базе
-    const { pool } = require('./database');
-    const client = await pool.connect();
-    logger.info('✅ Database connection verified');
-    client.release();
+    try {
+      const client = await pool.connect();
+      const result = await client.query('SELECT NOW() as time');
+      console.log(`✅ Database connected at ${result.rows[0].time}`);
+      client.release();
+    } catch (connError) {
+      console.error('❌ Database connection failed:', connError.message);
+      throw connError;
+    }
+    
+    // Запуск webhook сервера
+    console.log('🌐 Starting webhook server...');
+    try {
+      await webhookServer.start();
+      const port = process.env.PORT || 3000;
+      console.log(`✅ Webhook server running on port ${port}`);
+    } catch (webError) {
+      console.error('❌ Webhook server failed:', webError.message);
+      throw webError;
+    }
+    
+    // Запускаем WhatsApp менеджер
+    console.log('📱 Initializing WhatsApp manager...');
+    try {
+      const whatsappManager = require('./whatsapp/manager');
+      console.log('✅ WhatsApp manager initialized');
+      
+      // Запускаем сессии с задержкой
+      setTimeout(async () => {
+        try {
+          await whatsappManager.startAllSessions();
+          console.log('✅ WhatsApp sessions started');
+        } catch (sessionError) {
+          console.error('❌ Failed to start sessions:', sessionError.message);
+        }
+      }, 5000);
+      
+    } catch (waError) {
+      console.error('❌ WhatsApp manager error:', waError.message);
+      // Не падаем, продолжаем работу
+    }
+    
+    // Инициализация бота
+    console.log('🤖 Initializing Telegram bot...');
+    try {
+      const bot = require('./bot');
+      console.log('✅ Telegram bot initialized');
+    } catch (botError) {
+      console.error('❌ Bot initialization failed:', botError.message);
+      // Не падаем, просто логируем
+    }
+    
+    console.log('🎯 Service is running!');
+    console.log(`🌐 Webhook URL: ${process.env.TELEGRAM_WEBHOOK_URL || `http://localhost:${process.env.PORT || 3000}/webhook/telegram`}`);
     
   } catch (error) {
-    logger.error('❌ Failed to start service:', error);
+    console.error('❌ FATAL ERROR:', error);
+    console.error('Stack:', error.stack);
     process.exit(1);
   }
 }
 
-// Graceful shutdown
-process.on('SIGTERM', async () => {
-  logger.info('Received SIGTERM, shutting down gracefully...');
-  
-  // Закрываем все WhatsApp сессии
-  const { pool } = require('./database');
-  await pool.end();
-  
-  process.exit(0);
-});
-
-process.on('SIGINT', async () => {
-  logger.info('Received SIGINT, shutting down gracefully...');
-  
-  // Закрываем все WhatsApp сессии
-  const { pool } = require('./database');
-  await pool.end();
-  
-  process.exit(0);
-});
-
-// Обработка ошибок
-process.on('unhandledRejection', (error) => {
-  logger.error('Unhandled rejection:', error);
-});
-
-process.on('uncaughtException', (error) => {
-  logger.error('Uncaught exception:', error);
-});
+// ============================================
+// ЗАПУСК
+// ============================================
 
 start();
