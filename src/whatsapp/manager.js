@@ -1,4 +1,4 @@
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, makeInMemoryStore } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, makeInMemoryStore, Browsers } = require('@whiskeysockets/baileys');
 const QRCode = require('qrcode');
 const path = require('path');
 const fs = require('fs');
@@ -6,6 +6,7 @@ const { logger } = require('../utils/logger');
 const { WhatsAppAccountModel } = require('../database/models');
 const WarmupService = require('./warmup');
 const sessionManager = require('./session');
+const NodeCache = require('node-cache');
 
 class WhatsAppManager {
   constructor() {
@@ -17,7 +18,8 @@ class WhatsAppManager {
     this.MAX_RECONNECT_ATTEMPTS = 3;
     this.pendingConnections = new Map();
     this.connectionStatus = new Map();
-    this.browser = ['WhatsApp Warmup', 'Chrome', '120.0.0.0'];
+    // Кеш для групп
+    this.groupCache = new NodeCache({ stdTTL: 300, checkperiod: 60 });
   }
 
   async initializeSession(phoneNumber, telegramId) {
@@ -55,27 +57,31 @@ class WhatsAppManager {
 
       const { state, saveCreds } = await sessionManager.loadSession(phoneNumber);
 
+      // ПРАВИЛЬНАЯ КОНФИГУРАЦИЯ СОКЕТА
       const sock = makeWASocket({
         auth: state,
         printQRInTerminal: false,
-        browser: this.browser,
+        // Для парного кода используем десктопный браузер
+        browser: Browsers.macOS('Desktop'),
         syncFullHistory: false,
         markOnlineOnConnect: true,
-        version: [2, 3000, 1037673340],
-        connectTimeoutMs: 30000,
-        keepAliveIntervalMs: 15000,
+        // НЕ трогаем версию - используем дефолтную
+        connectTimeoutMs: 60000,
+        keepAliveIntervalMs: 30000,
         shouldSyncHistoryMessage: () => false,
         patchMessageBeforeSending: (message) => message,
         generateHighQualityLinkPreview: false,
-        defaultQueryTimeoutMs: 30000,
+        defaultQueryTimeoutMs: 60000,
+        // Кеш для групп
+        cachedGroupMetadata: async (jid) => {
+          const cached = this.groupCache.get(jid);
+          if (cached) return cached;
+          const result = await sock.groupMetadata(jid);
+          this.groupCache.set(jid, result);
+          return result;
+        },
         getMessage: async (key) => {
           return this.store.loadMessage(key.remoteJid, key.id);
-        },
-        requestOptions: {
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7'
-          }
         }
       });
 
@@ -85,12 +91,15 @@ class WhatsAppManager {
         telegramId,
         connected: false,
         qrSent: false,
-        startTime: Date.now()
+        startTime: Date.now(),
+        pairingCodeRequested: false
       });
 
+      // ОБРАБОТКА СОБЫТИЙ
       sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect, qr } = update;
 
+        // Обработка QR кода
         if (qr) {
           try {
             await this.sendQRToTelegram(telegramId, qr, phoneNumber);
@@ -99,6 +108,7 @@ class WhatsAppManager {
           }
         }
 
+        // Обработка подключения
         if (connection === 'open') {
           this.reconnectAttempts.delete(phoneNumber);
           this.connectionStatus.set(phoneNumber, 'connected');
@@ -117,12 +127,13 @@ class WhatsAppManager {
             await bot.sendMessage(telegramId, 
               `✅ *Аккаунт ${phoneNumber} подключен!*\n\n` +
               `📱 WhatsApp готов к работе.\n` +
-              `⏳ Начинается процесс прогрева...`
+              `🔄 Начинается поиск партнеров для общения...`
             );
           } catch (error) {
             logger.error(`Failed to send success message:`, error);
           }
           
+          // Запускаем прогрев через 5 секунд
           setTimeout(async () => {
             try {
               await this.warmupService.startWarmup(phoneNumber);
@@ -132,6 +143,7 @@ class WhatsAppManager {
           }, 5000);
         }
 
+        // Обработка отключения
         if (connection === 'close') {
           const statusCode = lastDisconnect?.error?.output?.statusCode;
           const session = this.sessions.get(phoneNumber);
@@ -142,6 +154,16 @@ class WhatsAppManager {
           
           this.connectionStatus.set(phoneNumber, 'disconnected');
 
+          // Если ошибка 515 - просто переподключаемся
+          if (statusCode === 515) {
+            logger.info(`Error 515 for ${phoneNumber}, reconnecting in 5s...`);
+            setTimeout(() => {
+              this._doInitializeSession(phoneNumber, telegramId);
+            }, 5000);
+            return;
+          }
+
+          // Если logout или блокировка
           if (statusCode === DisconnectReason.loggedOut || 
               statusCode === 401 || 
               statusCode === 403 ||
@@ -165,6 +187,7 @@ class WhatsAppManager {
             return;
           }
 
+          // Обычное переподключение
           if (statusCode !== DisconnectReason.loggedOut) {
             const attempts = this.reconnectAttempts.get(phoneNumber) || 0;
             
@@ -184,22 +207,12 @@ class WhatsAppManager {
             } else {
               logger.error(`Max reconnect attempts reached for ${phoneNumber}`);
               await WhatsAppAccountModel.updateStatus(phoneNumber, 'disconnected');
-              
-              try {
-                const bot = require('../bot');
-                await bot.sendMessage(telegramId, 
-                  `❌ *Не удалось подключить ${phoneNumber}*\n\n` +
-                  `Попыток: ${this.MAX_RECONNECT_ATTEMPTS}\n` +
-                  `Пожалуйста, переподключите аккаунт вручную.`
-                );
-              } catch (error) {
-                logger.error(`Failed to send disconnect message:`, error);
-              }
             }
           }
         }
       });
 
+      // Сохраняем креды
       sock.ev.on('creds.update', async () => {
         try {
           await saveCreds();
@@ -209,6 +222,7 @@ class WhatsAppManager {
         }
       });
 
+      // Обработка входящих сообщений
       sock.ev.on('messages.upsert', async (m) => {
         try {
           const msg = m.messages[0];
@@ -227,6 +241,7 @@ class WhatsAppManager {
         }
       });
 
+      // Обработка ошибок
       sock.ev.on('error', (error) => {
         logger.error(`Socket error for ${phoneNumber}:`, error);
       });
@@ -235,33 +250,83 @@ class WhatsAppManager {
 
     } catch (error) {
       logger.error(`Error initializing session for ${phoneNumber}:`, error);
+      throw error;
+    }
+  }
+
+  // ЗАПРОС ПАРНОГО КОДА (8-значный)
+  async getPairingCode(phoneNumber) {
+    try {
+      let session = this.sessions.get(phoneNumber);
       
-      if (error.message && (
-        error.message.includes('Connection Failure') ||
-        error.message.includes('ECONNRESET') ||
-        error.message.includes('ETIMEDOUT')
-      )) {
-        const attempts = this.reconnectAttempts.get(phoneNumber) || 0;
-        if (attempts < this.MAX_RECONNECT_ATTEMPTS) {
-          this.reconnectAttempts.set(phoneNumber, attempts + 1);
-          const delay = Math.min(30000 * Math.pow(2, attempts), 120000);
-          
-          logger.info(`Will retry ${phoneNumber} in ${delay}ms (attempt ${attempts + 1})`);
-          
-          return new Promise((resolve) => {
-            setTimeout(async () => {
-              try {
-                const result = await this._doInitializeSession(phoneNumber, telegramId);
-                resolve(result);
-              } catch (retryError) {
-                logger.error(`Retry failed for ${phoneNumber}:`, retryError);
-                throw retryError;
-              }
-            }, delay);
-          });
+      if (!session || !session.sock) {
+        // Создаем временную сессию для получения кода
+        const tempSessionPath = path.join(__dirname, '../../sessions', phoneNumber);
+        if (!fs.existsSync(tempSessionPath)) {
+          fs.mkdirSync(tempSessionPath, { recursive: true });
         }
+
+        const { state, saveCreds } = await sessionManager.loadSession(phoneNumber);
+        
+        const tempSock = makeWASocket({
+          auth: state,
+          printQRInTerminal: false,
+          browser: Browsers.macOS('Desktop'), // Для парного кода нужен десктоп
+          version: [2, 3000, 1037673340],
+          connectTimeoutMs: 60000,
+          keepAliveIntervalMs: 30000,
+          syncFullHistory: false,
+          markOnlineOnConnect: true,
+          getMessage: async (key) => {
+            return this.store.loadMessage(key.remoteJid, key.id);
+          }
+        });
+
+        // Ждем подключения
+        await new Promise((resolve, reject) => {
+          const timeout = setTimeout(() => reject(new Error('Connection timeout')), 30000);
+          
+          tempSock.ev.on('connection.update', async (update) => {
+            const { connection, qr } = update;
+            
+            if (connection === 'open') {
+              clearTimeout(timeout);
+              resolve();
+            }
+            
+            if (qr) {
+              // Игнорируем QR, мы хотим код
+            }
+          });
+        });
+
+        // Запрашиваем код
+        const code = await tempSock.requestPairingCode(phoneNumber);
+        
+        // Сохраняем сессию
+        this.sessions.set(phoneNumber, {
+          sock: tempSock,
+          saveCreds: saveCreds,
+          telegramId: null,
+          connected: false,
+          qrSent: false,
+          startTime: Date.now(),
+          pairingCodeRequested: true
+        });
+
+        return code;
       }
-      
+
+      // Если сессия уже есть, запрашиваем код
+      if (session.sock) {
+        const code = await session.sock.requestPairingCode(phoneNumber);
+        return code;
+      }
+
+      throw new Error('Session not found');
+
+    } catch (error) {
+      logger.error(`Failed to get pairing code for ${phoneNumber}:`, error);
       throw error;
     }
   }
@@ -290,8 +355,7 @@ class WhatsAppManager {
                  `1️⃣ Откройте WhatsApp на телефоне\n` +
                  `2️⃣ Нажмите "Связанные устройства" → "Привязать устройство"\n` +
                  `3️⃣ Наведите камеру на QR код\n\n` +
-                 `⏳ QR обновляется автоматически\n` +
-                 `🔄 Если QR не сканируется, нажмите "Обновить QR"`,
+                 `⏳ QR обновляется автоматически`,
         parse_mode: 'Markdown',
         reply_markup: {
           inline_keyboard: [
@@ -312,69 +376,6 @@ class WhatsAppManager {
       
     } catch (error) {
       logger.error(`Failed to send QR to Telegram: ${error.message}`);
-      
-      try {
-        const bot = require('../bot');
-        const code = await this.getPairingCode(phoneNumber);
-        
-        await bot.sendMessage(telegramId,
-          `🔑 *8-значный код для номера:* \`${phoneNumber}\`\n\n` +
-          `📱 *Инструкция:*\n` +
-          `1️⃣ Откройте WhatsApp на телефоне\n` +
-          `2️⃣ Нажмите "Связанные устройства" → "Привязать устройство"\n` +
-          `3️⃣ Выберите "Связать по номеру телефона"\n` +
-          `4️⃣ Введите код: \`${code}\`\n\n` +
-          `⏳ Код действителен 5 минут\n` +
-          `🔒 Никому не сообщайте этот код!`,
-          {
-            parse_mode: 'Markdown',
-            reply_markup: {
-              inline_keyboard: [
-                [{ text: '🔄 Получить новый код', callback_data: `get_code_${phoneNumber}` }],
-                [{ text: '🔙 Назад', callback_data: 'list_accounts' }]
-              ]
-            }
-          }
-        );
-      } catch (codeError) {
-        logger.error(`Failed to send pairing code: ${codeError.message}`);
-      }
-    }
-  }
-
-  async getPairingCode(phoneNumber) {
-    try {
-      const session = this.sessions.get(phoneNumber);
-      if (!session || !session.sock) {
-        throw new Error('Session not found');
-      }
-
-      const code = await session.sock.requestPairingCode(phoneNumber);
-      return code;
-    } catch (error) {
-      logger.error(`Failed to get pairing code for ${phoneNumber}:`, error);
-      throw error;
-    }
-  }
-
-  async refreshQRCode(phoneNumber, telegramId) {
-    try {
-      await this.disconnect(phoneNumber);
-      
-      const sessionPath = path.join(__dirname, '../../sessions', phoneNumber);
-      if (fs.existsSync(sessionPath)) {
-        fs.rmSync(sessionPath, { recursive: true, force: true });
-      }
-      
-      this.reconnectAttempts.delete(phoneNumber);
-      this.connectionStatus.delete(phoneNumber);
-      
-      await this.initializeSession(phoneNumber, telegramId);
-      
-      return true;
-    } catch (error) {
-      logger.error(`Failed to refresh QR for ${phoneNumber}:`, error);
-      return false;
     }
   }
 
@@ -431,31 +432,8 @@ class WhatsAppManager {
     }
   }
 
-  async reconnectAll() {
-    logger.info('Reconnecting all sessions...');
-    const accounts = await WhatsAppAccountModel.getActiveAccounts();
-    
-    for (const account of accounts) {
-      if (account.status === 'connected') {
-        try {
-          await this.disconnect(account.phone_number);
-          await this.sleep(2000);
-          await this.initializeSession(account.phone_number, account.user_telegram_id);
-        } catch (error) {
-          logger.error(`Failed to reconnect ${account.phone_number}:`, error);
-        }
-      }
-    }
-  }
-
   getSession(phoneNumber) {
     return this.sessions.get(phoneNumber);
-  }
-
-  getSessionStatus(phoneNumber) {
-    const session = this.sessions.get(phoneNumber);
-    if (!session) return 'not_initialized';
-    return session.connected ? 'connected' : 'connecting';
   }
 
   getActiveSessions() {
