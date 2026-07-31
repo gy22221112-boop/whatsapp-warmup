@@ -1,0 +1,10 @@
+node_modules/
+sessions/
+logs/
+.env
+*.log
+.DS_Storenode_modules/ 
+.env 
+sessions/ 
+logs/ 
+package-lock.json 

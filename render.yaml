@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: whatsapp-warmup
+    env: node
+    buildCommand: |
+      apt-get update && apt-get install -y libcairo2-dev libjpeg-dev libpango1.0-dev libgif-dev build-essential g++
+      npm install
+    startCommand: npm start
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_WEBHOOK_URL
+        value: https://your-app.onrender.com/webhook/telegram
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: MAX_ACCOUNTS
+        value: 10
+      - key: DEFAULT_WARMUP_TIME
+        value: 6
+      - key: NODE_ENV
+        value: production
+    disk:
+      name: sessions
+      mountPath: /sessions
+      sizeGB: 2
+    healthCheckPath: /health
