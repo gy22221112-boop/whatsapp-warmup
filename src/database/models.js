@@ -21,7 +21,7 @@ class UserModel {
   }
 
   static async getAll() {
-    const result = await pool.query('SELECT * FROM users');
+    const result = await pool.query('SELECT * FROM users ORDER BY created_at DESC');
     return result.rows;
   }
 
@@ -39,6 +39,46 @@ class UserModel {
       RETURNING *
     `;
     const result = await pool.query(query, [telegramId]);
+    return result.rows[0];
+  }
+
+  static async updateReferrals(telegramId, referrerId) {
+    const query = `
+      UPDATE users 
+      SET referred_by = $1, bonus_hours = bonus_hours + 1
+      WHERE telegram_id = $2
+      RETURNING *
+    `;
+    const result = await pool.query(query, [referrerId, telegramId]);
+    return result.rows[0];
+  }
+
+  static async addBonusHours(telegramId, hours) {
+    const query = `
+      UPDATE users 
+      SET bonus_hours = bonus_hours + $1
+      WHERE telegram_id = $2
+      RETURNING *
+    `;
+    const result = await pool.query(query, [hours, telegramId]);
+    return result.rows[0];
+  }
+
+  static async getReferrals(telegramId) {
+    const result = await pool.query(
+      'SELECT * FROM users WHERE referred_by = $1',
+      [telegramId]
+    );
+    return result.rows;
+  }
+
+  static async getStats() {
+    const result = await pool.query(`
+      SELECT 
+        COUNT(*) as total_users,
+        SUM(CASE WHEN referred_by IS NOT NULL THEN 1 ELSE 0 END) as total_referrals
+      FROM users
+    `);
     return result.rows[0];
   }
 }
@@ -134,6 +174,65 @@ class WhatsAppAccountModel {
     const result = await pool.query(query, [warmupTime, warmupType, phoneNumber]);
     return result.rows[0];
   }
+
+  static async updateCustomSettings(phoneNumber, settings) {
+    const { name, status, reactions, sendPhotos, sendVoice } = settings;
+    const query = `
+      UPDATE whatsapp_accounts 
+      SET custom_name = COALESCE($1, custom_name),
+          custom_status = COALESCE($2, custom_status),
+          send_reactions = COALESCE($3, send_reactions),
+          send_photos = COALESCE($4, send_photos),
+          send_voice = COALESCE($5, send_voice),
+          updated_at = CURRENT_TIMESTAMP
+      WHERE phone_number = $6
+      RETURNING *
+    `;
+    const result = await pool.query(query, [name, status, reactions, sendPhotos, sendVoice, phoneNumber]);
+    return result.rows[0];
+  }
 }
 
-module.exports = { UserModel, WhatsAppAccountModel };
+class PaymentModel {
+  static async create(telegramId, amount, hours, paymentId) {
+    const query = `
+      INSERT INTO payments (user_telegram_id, amount, hours, payment_id, status)
+      VALUES ($1, $2, $3, $4, 'pending')
+      RETURNING *
+    `;
+    const result = await pool.query(query, [telegramId, amount, hours, paymentId]);
+    return result.rows[0];
+  }
+
+  static async updateStatus(paymentId, status) {
+    const query = `
+      UPDATE payments 
+      SET status = $1, completed_at = CURRENT_TIMESTAMP
+      WHERE payment_id = $2
+      RETURNING *
+    `;
+    const result = await pool.query(query, [status, paymentId]);
+    return result.rows[0];
+  }
+
+  static async getByUser(telegramId) {
+    const result = await pool.query(
+      'SELECT * FROM payments WHERE user_telegram_id = $1 ORDER BY created_at DESC',
+      [telegramId]
+    );
+    return result.rows;
+  }
+
+  static async getStats() {
+    const result = await pool.query(`
+      SELECT 
+        COUNT(*) as total_payments,
+        SUM(amount) as total_revenue,
+        COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed_payments
+      FROM payments
+    `);
+    return result.rows[0];
+  }
+}
+
+module.exports = { UserModel, WhatsAppAccountModel, PaymentModel };
