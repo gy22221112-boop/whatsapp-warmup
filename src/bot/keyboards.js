@@ -1,19 +1,30 @@
+// ============================================
+// ГЛАВНОЕ МЕНЮ
+// ============================================
+
 const mainMenuKeyboard = [
   [{ text: '➕ Добавить номер', callback_data: 'add_account' }],
   [{ text: '📋 Список аккаунтов', callback_data: 'list_accounts' }],
   [{ text: '🚀 Запустить прогрев', callback_data: 'start_warmup' }],
   [{ text: '💰 Цены', callback_data: 'pricing' }],
   [{ text: '📢 Реферальная система', callback_data: 'referral' }],
-  [{ text: '⚙️ Настройки', callback_data: 'warmup_settings' }],
+  [{ text: '⚙️ Настройки прогрева', callback_data: 'warmup_settings' }],
   [{ text: '⚙️ Админ-панель', callback_data: 'admin_panel' }]
 ];
 
-const pricingKeyboard = [
-  [{ text: '⏰ 6 часов - $1.5', callback_data: 'buy_6h' }],
-  [{ text: '⏰ 12 часов - $2', callback_data: 'buy_12h' }],
-  [{ text: '⏰ 24 часа - $4', callback_data: 'buy_24h' }],
+// ============================================
+// МЕНЮ СПИСКА АККАУНТОВ
+// ============================================
+
+const accountMenuKeyboard = [
+  [{ text: '➕ Добавить номер', callback_data: 'add_account' }],
+  [{ text: '🔄 Обновить список', callback_data: 'list_accounts' }],
   [{ text: '🔙 Назад', callback_data: 'back_to_menu' }]
 ];
+
+// ============================================
+// МЕНЮ НАСТРОЕК ПРОГРЕВА
+// ============================================
 
 const warmupMenuKeyboard = (currentTime, currentType) => {
   const timeButtons = [
@@ -35,6 +46,21 @@ const warmupMenuKeyboard = (currentTime, currentType) => {
   ];
 };
 
+// ============================================
+// МЕНЮ ЦЕН
+// ============================================
+
+const pricingKeyboard = [
+  [{ text: '⏰ 6 часов - $1.5', callback_data: 'buy_6h' }],
+  [{ text: '⏰ 12 часов - $2', callback_data: 'buy_12h' }],
+  [{ text: '⏰ 24 часа - $4', callback_data: 'buy_24h' }],
+  [{ text: '🔙 Назад', callback_data: 'back_to_menu' }]
+];
+
+// ============================================
+// АДМИН-ПАНЕЛЬ
+// ============================================
+
 const adminKeyboard = [
   [{ text: '📊 Статистика', callback_data: 'stats' }],
   [{ text: '👥 Все пользователи', callback_data: 'all_users' }],
@@ -43,6 +69,10 @@ const adminKeyboard = [
   [{ text: '📢 Рассылка', callback_data: 'broadcast' }],
   [{ text: '🔙 Назад', callback_data: 'back_to_menu' }]
 ];
+
+// ============================================
+// МЕНЮ НАСТРОЕК АККАУНТА
+// ============================================
 
 const settingsKeyboard = [
   [{ text: '📛 Изменить имя', callback_data: 'change_name' }],
@@ -53,11 +83,19 @@ const settingsKeyboard = [
   [{ text: '🔙 Назад', callback_data: 'list_accounts' }]
 ];
 
+// ============================================
+// РЕФЕРАЛЬНАЯ СИСТЕМА
+// ============================================
+
 const referralKeyboard = [
   [{ text: '👥 Мои рефералы', callback_data: 'my_referrals' }],
   [{ text: '🎁 Мои бонусы', callback_data: 'my_bonuses' }],
   [{ text: '🔙 Назад', callback_data: 'back_to_menu' }]
 ];
+
+// ============================================
+// ЭКСПОРТ ВСЕХ КЛАВИАТУР
+// ============================================
 
 module.exports = {
   mainMenuKeyboard,
