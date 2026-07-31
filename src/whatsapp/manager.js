@@ -56,17 +56,18 @@ class WhatsAppManager {
       const { state, saveCreds } = await sessionManager.loadSession(phoneNumber);
 
       const sock = makeWASocket({
-        auth: state,
-        printQRInTerminal: false,
-        browser: Browsers.macOS('Desktop'),
-        syncFullHistory: false,
-        markOnlineOnConnect: true,
-        connectTimeoutMs: 60000,
-        keepAliveIntervalMs: 30000,
-        shouldSyncHistoryMessage: () => false,
-        patchMessageBeforeSending: (message) => message,
-        generateHighQualityLinkPreview: false,
-        defaultQueryTimeoutMs: 60000,
+  auth: state,
+  printQRInTerminal: false,
+  browser: Browsers.macOS('Desktop'),
+  version: [2, 3000, 1037673340],  // <-- Явно указываем версию
+  syncFullHistory: false,
+  markOnlineOnConnect: true,
+  connectTimeoutMs: 60000,
+  keepAliveIntervalMs: 30000,
+  shouldSyncHistoryMessage: () => false,
+  patchMessageBeforeSending: (message) => message,
+  generateHighQualityLinkPreview: false,
+  defaultQueryTimeoutMs: 60000,
         cachedGroupMetadata: async (jid) => {
           if (this.groupCache.has(jid)) {
             return this.groupCache.get(jid);
