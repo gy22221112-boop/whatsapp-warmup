@@ -101,6 +101,11 @@ bot.on('callback_query', async (callbackQuery) => {
         await startWarmup(chatId);
         break;
 
+      // ========== СТАТИСТИКА ПРОГРЕВА ==========
+      case 'warmup_stats':
+        await showWarmupStats(chatId);
+        break;
+
       // ========== НАСТРОЙКИ ==========
       case 'warmup_settings':
         await showWarmupSettings(chatId);
@@ -138,6 +143,12 @@ bot.on('callback_query', async (callbackQuery) => {
             );
           }
         }
+        break;
+
+      // ========== ВЫБОР ВРЕМЕНИ ДЛЯ ПРОГРЕВА ==========
+      case data.startsWith('warmup_'):
+        const hours = parseInt(data.replace('warmup_', ''));
+        await executeWarmup(chatId, hours);
         break;
 
       // ========== УДАЛЕНИЕ АККАУНТА ==========
@@ -376,107 +387,6 @@ bot.onText(/\/status/, async (msg) => {
   }
 });
 
-// /stats - статистика аккаунтов
-bot.onText(/\/stats/, async (msg) => {
-  const chatId = msg.chat.id;
-  
-  try {
-    const accounts = await WhatsAppAccountModel.findByUser(chatId);
-    
-    if (accounts.length === 0) {
-      await bot.sendMessage(chatId, '📭 У вас нет аккаунтов');
-      return;
-    }
-
-    let message = '📊 *Статистика ваших аккаунтов*\n\n';
-    
-    for (const acc of accounts) {
-      const statusMap = {
-        'pending': '⏳ Ожидание',
-        'connected': '✅ Подключен',
-        'warming': '🔄 Прогрев...',
-        'warmed': '🔥 Готов',
-        'disconnected': '❌ Отключен'
-      };
-      
-      const status = statusMap[acc.status] || acc.status;
-      
-      message += `📱 *${acc.phone_number}*\n`;
-      message += `   Статус: ${status}\n`;
-      message += `   📤 Отправлено: ${acc.messages_sent}\n`;
-      message += `   📥 Получено: ${acc.messages_received}\n`;
-      message += `   ⏰ Время: ${acc.warmup_time}ч\n`;
-      
-      // Получаем прогресс
-      const warmupService = require('../whatsapp/warmup');
-      const progress = warmupService.getWarmupStatus(acc.phone_number);
-      
-      if (progress && progress.isRunning) {
-        message += `   📈 Прогресс: ${progress.progress.toFixed(1)}%\n`;
-        message += `   👥 Партнеров: ${progress.partners}\n`;
-      }
-      
-      message += '\n';
-    }
-
-    await bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
-
-  } catch (error) {
-    await bot.sendMessage(chatId, `❌ Ошибка: ${error.message}`);
-  }
-});
-
-// /forceclean - принудительная очистка
-bot.onText(/\/forceclean/, async (msg) => {
-  const chatId = msg.chat.id;
-  
-  try {
-    const user = await UserModel.findByTelegramId(chatId);
-    if (!user?.is_admin) {
-      await bot.sendMessage(chatId, '⛔ У вас нет прав администратора');
-      return;
-    }
-
-    const fs = require('fs');
-    const path = require('path');
-    
-    const sessionsPath = path.join(__dirname, '../../sessions');
-    
-    if (!fs.existsSync(sessionsPath)) {
-      await bot.sendMessage(chatId, '📂 Папка с сессиями не найдена');
-      return;
-    }
-
-    const folders = fs.readdirSync(sessionsPath);
-    
-    if (folders.length === 0) {
-      await bot.sendMessage(chatId, '📂 Папка с сессиями пуста');
-      return;
-    }
-
-    let deleted = 0;
-    for (const folder of folders) {
-      const folderPath = path.join(sessionsPath, folder);
-      try {
-        fs.rmSync(folderPath, { recursive: true, force: true });
-        deleted++;
-      } catch (error) {
-        logger.error(`Failed to delete ${folder}:`, error);
-      }
-    }
-    
-    await bot.sendMessage(chatId, 
-      `✅ *Принудительная очистка завершена*\n\n` +
-      `🗑️ Удалено папок: ${deleted}\n\n` +
-      `🔄 Теперь выполните /restart и добавьте аккаунты заново.`,
-      { parse_mode: 'Markdown' }
-    );
-
-  } catch (error) {
-    await bot.sendMessage(chatId, `❌ Ошибка: ${error.message}`);
-  }
-});
-
 // ============================================
 // ФУНКЦИИ ОБРАБОТЧИКИ
 // ============================================
@@ -628,6 +538,7 @@ async function showAccounts(chatId) {
     keyboard.push(
       [{ text: '➕ Добавить номер', callback_data: 'add_account' }],
       [{ text: '🚀 Запустить прогрев', callback_data: 'start_warmup' }],
+      [{ text: '📊 Статистика прогрева', callback_data: 'warmup_stats' }],
       [{ text: '🔙 Назад', callback_data: 'back_to_menu' }]
     );
 
@@ -710,17 +621,6 @@ async function startWarmup(chatId) {
 }
 
 // ---- ЗАПУСК ПРОГРЕВА С ВЫБРАННЫМ ВРЕМЕНЕМ ----
-bot.on('callback_query', async (callbackQuery) => {
-  const chatId = callbackQuery.message.chat.id;
-  const data = callbackQuery.data;
-
-  if (data.startsWith('warmup_')) {
-    await bot.answerCallbackQuery(callbackQuery.id);
-    const hours = parseInt(data.replace('warmup_', ''));
-    await executeWarmup(chatId, hours);
-  }
-});
-
 async function executeWarmup(chatId, hours) {
   try {
     const accounts = await WhatsAppAccountModel.findByUser(chatId);
@@ -735,12 +635,14 @@ async function executeWarmup(chatId, hours) {
       );
     }
 
-    // Запускаем прогревы
+    // Запускаем прогревы вручную через менеджер
     let started = 0;
     for (const account of connectedAccounts) {
       try {
-        await whatsappManager.initializeSession(account.phone_number, chatId);
-        started++;
+        const result = await whatsappManager.startWarmupManually(account.phone_number);
+        if (result) {
+          started++;
+        }
         await new Promise(resolve => setTimeout(resolve, 2000));
       } catch (error) {
         logger.error(`Failed to start warmup for ${account.phone_number}:`, error);
@@ -752,12 +654,12 @@ async function executeWarmup(chatId, hours) {
       `📱 Аккаунтов: ${started}/${connectedAccounts.length}\n` +
       `⏰ Время: ${hours} часов\n` +
       `🔄 Аккаунты начали общаться!\n\n` +
-      `📊 Следите за прогрессом в команде /stats`,
+      `📊 Следите за прогрессом в "📊 Статистика прогрева"`,
       {
         parse_mode: 'Markdown',
         reply_markup: {
           inline_keyboard: [
-            [{ text: '📊 Статистика', callback_data: 'stats' }],
+            [{ text: '📊 Статистика прогрева', callback_data: 'warmup_stats' }],
             [{ text: '📋 Список аккаунтов', callback_data: 'list_accounts' }],
             [{ text: '🔙 Назад', callback_data: 'back_to_menu' }]
           ]
@@ -767,6 +669,73 @@ async function executeWarmup(chatId, hours) {
 
   } catch (error) {
     logger.error(`Error executing warmup: ${error.message}`);
+    await bot.sendMessage(chatId, `❌ Ошибка: ${error.message}`);
+  }
+}
+
+// ---- СТАТИСТИКА ПРОГРЕВА ----
+async function showWarmupStats(chatId) {
+  try {
+    const accounts = await WhatsAppAccountModel.findByUser(chatId);
+    
+    if (accounts.length === 0) {
+      await bot.sendMessage(chatId, '📭 У вас нет аккаунтов');
+      return;
+    }
+
+    let message = '📊 *Статистика прогрева*\n\n';
+    let hasActiveWarmup = false;
+    
+    const warmupService = require('../whatsapp/warmup');
+    
+    for (const acc of accounts) {
+      const statusMap = {
+        'pending': '⏳ Ожидание',
+        'connected': '✅ Подключен',
+        'warming': '🔄 Прогрев...',
+        'warmed': '🔥 Готов',
+        'disconnected': '❌ Отключен'
+      };
+      
+      const status = statusMap[acc.status] || acc.status;
+      const progress = warmupService.getWarmupStatus(acc.phone_number);
+      
+      message += `📱 *${acc.phone_number}*\n`;
+      message += `   Статус: ${status}\n`;
+      message += `   📤 Отправлено: ${acc.messages_sent}\n`;
+      message += `   📥 Получено: ${acc.messages_received}\n`;
+      message += `   ⏰ Время: ${acc.warmup_time}ч\n`;
+      
+      if (progress && progress.isRunning) {
+        message += `   📈 Прогресс: ${progress.progress.toFixed(1)}%\n`;
+        message += `   👥 Партнеров: ${progress.partners}\n`;
+        message += `   📨 Сообщений: ${progress.messagesSent}/${progress.totalMessages}\n`;
+        hasActiveWarmup = true;
+      } else if (acc.status === 'warming') {
+        message += `   ⏳ Прогрев запускается...\n`;
+      }
+      
+      message += '\n';
+    }
+
+    if (!hasActiveWarmup) {
+      message += `\n🔴 *Прогрев не запущен*\n`;
+      message += `Нажмите "🚀 Запустить прогрев" для начала.\n`;
+    }
+
+    await bot.sendMessage(chatId, message, {
+      parse_mode: 'Markdown',
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: '🔄 Обновить', callback_data: 'warmup_stats' }],
+          [{ text: '🚀 Запустить прогрев', callback_data: 'start_warmup' }],
+          [{ text: '🔙 Назад', callback_data: 'back_to_menu' }]
+        ]
+      }
+    });
+
+  } catch (error) {
+    logger.error(`Error showing warmup stats: ${error.message}`);
     await bot.sendMessage(chatId, `❌ Ошибка: ${error.message}`);
   }
 }
@@ -859,60 +828,6 @@ async function setWarmupType(chatId, type) {
     }
   );
 }
-
-// ---- СТАТИСТИКА ----
-bot.on('callback_query', async (callbackQuery) => {
-  const chatId = callbackQuery.message.chat.id;
-  const data = callbackQuery.data;
-
-  if (data === 'stats') {
-    await bot.answerCallbackQuery(callbackQuery.id);
-    
-    try {
-      const accounts = await WhatsAppAccountModel.findByUser(chatId);
-      
-      if (accounts.length === 0) {
-        await bot.sendMessage(chatId, '📭 У вас нет аккаунтов');
-        return;
-      }
-
-      let message = '📊 *Статистика ваших аккаунтов*\n\n';
-      
-      for (const acc of accounts) {
-        const statusMap = {
-          'pending': '⏳ Ожидание',
-          'connected': '✅ Подключен',
-          'warming': '🔄 Прогрев...',
-          'warmed': '🔥 Готов',
-          'disconnected': '❌ Отключен'
-        };
-        
-        const status = statusMap[acc.status] || acc.status;
-        
-        message += `📱 *${acc.phone_number}*\n`;
-        message += `   Статус: ${status}\n`;
-        message += `   📤 Отправлено: ${acc.messages_sent}\n`;
-        message += `   📥 Получено: ${acc.messages_received}\n`;
-        message += `   ⏰ Время: ${acc.warmup_time}ч\n`;
-        
-        const warmupService = require('../whatsapp/warmup');
-        const progress = warmupService.getWarmupStatus(acc.phone_number);
-        
-        if (progress && progress.isRunning) {
-          message += `   📈 Прогресс: ${progress.progress.toFixed(1)}%\n`;
-          message += `   👥 Партнеров: ${progress.partners}\n`;
-        }
-        
-        message += '\n';
-      }
-
-      await bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
-
-    } catch (error) {
-      await bot.sendMessage(chatId, `❌ Ошибка: ${error.message}`);
-    }
-  }
-});
 
 // ---- АДМИН-ПАНЕЛЬ ----
 async function showAdminPanel(chatId) {
