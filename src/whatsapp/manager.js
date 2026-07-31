@@ -56,18 +56,18 @@ class WhatsAppManager {
       const { state, saveCreds } = await sessionManager.loadSession(phoneNumber);
 
       const sock = makeWASocket({
-  auth: state,
-  printQRInTerminal: false,
-  browser: Browsers.macOS('Desktop'),
-  version: [2, 3000, 1037673340],  // <-- Явно указываем версию
-  syncFullHistory: false,
-  markOnlineOnConnect: true,
-  connectTimeoutMs: 60000,
-  keepAliveIntervalMs: 30000,
-  shouldSyncHistoryMessage: () => false,
-  patchMessageBeforeSending: (message) => message,
-  generateHighQualityLinkPreview: false,
-  defaultQueryTimeoutMs: 60000,
+        auth: state,
+        printQRInTerminal: false,
+        browser: Browsers.macOS('Desktop'),
+        version: [2, 3000, 1037673340],
+        syncFullHistory: false,
+        markOnlineOnConnect: true,
+        connectTimeoutMs: 60000,
+        keepAliveIntervalMs: 30000,
+        shouldSyncHistoryMessage: () => false,
+        patchMessageBeforeSending: (message) => message,
+        generateHighQualityLinkPreview: false,
+        defaultQueryTimeoutMs: 60000,
         cachedGroupMetadata: async (jid) => {
           if (this.groupCache.has(jid)) {
             return this.groupCache.get(jid);
@@ -132,11 +132,35 @@ class WhatsAppManager {
             logger.error(`Failed to send success message:`, error);
           }
           
+          // ============================================
+          // 🔥 ИСПРАВЛЕНИЕ: ЗАПУСКАТЬ ТОЛЬКО ЕСЛИ ЕСТЬ ПАРТНЕРЫ
+          // ============================================
           setTimeout(async () => {
             try {
-              await this.warmupService.startWarmup(phoneNumber);
+              // Проверяем, есть ли другие подключенные аккаунты
+              const allAccounts = await WhatsAppAccountModel.getActiveAccounts();
+              const partners = allAccounts.filter(a => a.phone_number !== phoneNumber);
+              
+              if (partners.length > 0) {
+                logger.info(`✅ Found ${partners.length} partners for ${phoneNumber}, starting warmup...`);
+                await this.warmupService.startWarmup(phoneNumber);
+              } else {
+                logger.info(`⏳ No partners found for ${phoneNumber}, waiting for other accounts...`);
+                
+                // Отправляем уведомление пользователю
+                try {
+                  const bot = require('../bot');
+                  await bot.sendMessage(telegramId, 
+                    `⏳ *Аккаунт ${phoneNumber} ожидает партнеров*\n\n` +
+                    `Для запуска прогрева необходимо минимум 2 аккаунта.\n` +
+                    `Добавьте еще один номер или дождитесь подключения других аккаунтов.`
+                  );
+                } catch (error) {
+                  logger.error(`Failed to send waiting message:`, error);
+                }
+              }
             } catch (error) {
-              logger.error(`Failed to start warmup:`, error);
+              logger.error(`Failed to check partners for ${phoneNumber}:`, error);
             }
           }, 5000);
         }
