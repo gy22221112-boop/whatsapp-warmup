@@ -101,7 +101,7 @@ bot.on('callback_query', async (callbackQuery) => {
         await startWarmup(chatId);
         break;
 
-      // ========== СТАТИСТИКА ПРОГРЕВА ==========
+      // ========== СТАТИСТИКА ПРОГРЕВА ==========  // <-- ДОБАВЛЕНО
       case 'warmup_stats':
         await showWarmupStats(chatId);
         break;
