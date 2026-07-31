@@ -6,7 +6,6 @@ const { logger } = require('../utils/logger');
 const { WhatsAppAccountModel } = require('../database/models');
 const WarmupService = require('./warmup');
 const sessionManager = require('./session');
-const NodeCache = require('node-cache');
 
 class WhatsAppManager {
   constructor() {
@@ -18,8 +17,7 @@ class WhatsAppManager {
     this.MAX_RECONNECT_ATTEMPTS = 3;
     this.pendingConnections = new Map();
     this.connectionStatus = new Map();
-    // Кеш для групп
-    this.groupCache = new NodeCache({ stdTTL: 300, checkperiod: 60 });
+    this.groupCache = new Map();
   }
 
   async initializeSession(phoneNumber, telegramId) {
@@ -57,28 +55,31 @@ class WhatsAppManager {
 
       const { state, saveCreds } = await sessionManager.loadSession(phoneNumber);
 
-      // ПРАВИЛЬНАЯ КОНФИГУРАЦИЯ СОКЕТА
       const sock = makeWASocket({
         auth: state,
         printQRInTerminal: false,
-        // Для парного кода используем десктопный браузер
         browser: Browsers.macOS('Desktop'),
         syncFullHistory: false,
         markOnlineOnConnect: true,
-        // НЕ трогаем версию - используем дефолтную
         connectTimeoutMs: 60000,
         keepAliveIntervalMs: 30000,
         shouldSyncHistoryMessage: () => false,
         patchMessageBeforeSending: (message) => message,
         generateHighQualityLinkPreview: false,
         defaultQueryTimeoutMs: 60000,
-        // Кеш для групп
         cachedGroupMetadata: async (jid) => {
-          const cached = this.groupCache.get(jid);
-          if (cached) return cached;
-          const result = await sock.groupMetadata(jid);
-          this.groupCache.set(jid, result);
-          return result;
+          if (this.groupCache.has(jid)) {
+            return this.groupCache.get(jid);
+          }
+          try {
+            const result = await sock.groupMetadata(jid);
+            this.groupCache.set(jid, result);
+            setTimeout(() => this.groupCache.delete(jid), 300000);
+            return result;
+          } catch (error) {
+            logger.error(`Failed to get group metadata for ${jid}:`, error);
+            return null;
+          }
         },
         getMessage: async (key) => {
           return this.store.loadMessage(key.remoteJid, key.id);
@@ -95,11 +96,9 @@ class WhatsAppManager {
         pairingCodeRequested: false
       });
 
-      // ОБРАБОТКА СОБЫТИЙ
       sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect, qr } = update;
 
-        // Обработка QR кода
         if (qr) {
           try {
             await this.sendQRToTelegram(telegramId, qr, phoneNumber);
@@ -108,7 +107,6 @@ class WhatsAppManager {
           }
         }
 
-        // Обработка подключения
         if (connection === 'open') {
           this.reconnectAttempts.delete(phoneNumber);
           this.connectionStatus.set(phoneNumber, 'connected');
@@ -133,7 +131,6 @@ class WhatsAppManager {
             logger.error(`Failed to send success message:`, error);
           }
           
-          // Запускаем прогрев через 5 секунд
           setTimeout(async () => {
             try {
               await this.warmupService.startWarmup(phoneNumber);
@@ -143,7 +140,6 @@ class WhatsAppManager {
           }, 5000);
         }
 
-        // Обработка отключения
         if (connection === 'close') {
           const statusCode = lastDisconnect?.error?.output?.statusCode;
           const session = this.sessions.get(phoneNumber);
@@ -154,7 +150,6 @@ class WhatsAppManager {
           
           this.connectionStatus.set(phoneNumber, 'disconnected');
 
-          // Если ошибка 515 - просто переподключаемся
           if (statusCode === 515) {
             logger.info(`Error 515 for ${phoneNumber}, reconnecting in 5s...`);
             setTimeout(() => {
@@ -163,7 +158,6 @@ class WhatsAppManager {
             return;
           }
 
-          // Если logout или блокировка
           if (statusCode === DisconnectReason.loggedOut || 
               statusCode === 401 || 
               statusCode === 403 ||
@@ -187,7 +181,6 @@ class WhatsAppManager {
             return;
           }
 
-          // Обычное переподключение
           if (statusCode !== DisconnectReason.loggedOut) {
             const attempts = this.reconnectAttempts.get(phoneNumber) || 0;
             
@@ -212,7 +205,6 @@ class WhatsAppManager {
         }
       });
 
-      // Сохраняем креды
       sock.ev.on('creds.update', async () => {
         try {
           await saveCreds();
@@ -222,7 +214,6 @@ class WhatsAppManager {
         }
       });
 
-      // Обработка входящих сообщений
       sock.ev.on('messages.upsert', async (m) => {
         try {
           const msg = m.messages[0];
@@ -241,7 +232,6 @@ class WhatsAppManager {
         }
       });
 
-      // Обработка ошибок
       sock.ev.on('error', (error) => {
         logger.error(`Socket error for ${phoneNumber}:`, error);
       });
@@ -254,13 +244,11 @@ class WhatsAppManager {
     }
   }
 
-  // ЗАПРОС ПАРНОГО КОДА (8-значный)
   async getPairingCode(phoneNumber) {
     try {
       let session = this.sessions.get(phoneNumber);
       
       if (!session || !session.sock) {
-        // Создаем временную сессию для получения кода
         const tempSessionPath = path.join(__dirname, '../../sessions', phoneNumber);
         if (!fs.existsSync(tempSessionPath)) {
           fs.mkdirSync(tempSessionPath, { recursive: true });
@@ -271,8 +259,7 @@ class WhatsAppManager {
         const tempSock = makeWASocket({
           auth: state,
           printQRInTerminal: false,
-          browser: Browsers.macOS('Desktop'), // Для парного кода нужен десктоп
-          version: [2, 3000, 1037673340],
+          browser: Browsers.macOS('Desktop'),
           connectTimeoutMs: 60000,
           keepAliveIntervalMs: 30000,
           syncFullHistory: false,
@@ -282,28 +269,21 @@ class WhatsAppManager {
           }
         });
 
-        // Ждем подключения
         await new Promise((resolve, reject) => {
           const timeout = setTimeout(() => reject(new Error('Connection timeout')), 30000);
           
           tempSock.ev.on('connection.update', async (update) => {
-            const { connection, qr } = update;
+            const { connection } = update;
             
             if (connection === 'open') {
               clearTimeout(timeout);
               resolve();
             }
-            
-            if (qr) {
-              // Игнорируем QR, мы хотим код
-            }
           });
         });
 
-        // Запрашиваем код
         const code = await tempSock.requestPairingCode(phoneNumber);
         
-        // Сохраняем сессию
         this.sessions.set(phoneNumber, {
           sock: tempSock,
           saveCreds: saveCreds,
@@ -317,7 +297,6 @@ class WhatsAppManager {
         return code;
       }
 
-      // Если сессия уже есть, запрашиваем код
       if (session.sock) {
         const code = await session.sock.requestPairingCode(phoneNumber);
         return code;
@@ -379,6 +358,27 @@ class WhatsAppManager {
     }
   }
 
+  async refreshQRCode(phoneNumber, telegramId) {
+    try {
+      await this.disconnect(phoneNumber);
+      
+      const sessionPath = path.join(__dirname, '../../sessions', phoneNumber);
+      if (fs.existsSync(sessionPath)) {
+        fs.rmSync(sessionPath, { recursive: true, force: true });
+      }
+      
+      this.reconnectAttempts.delete(phoneNumber);
+      this.connectionStatus.delete(phoneNumber);
+      
+      await this.initializeSession(phoneNumber, telegramId);
+      
+      return true;
+    } catch (error) {
+      logger.error(`Failed to refresh QR for ${phoneNumber}:`, error);
+      return false;
+    }
+  }
+
   async disconnect(phoneNumber) {
     const session = this.sessions.get(phoneNumber);
     if (session) {
@@ -429,6 +429,23 @@ class WhatsAppManager {
       
     } catch (error) {
       logger.error('Failed to start sessions:', error);
+    }
+  }
+
+  async reconnectAll() {
+    logger.info('Reconnecting all sessions...');
+    const accounts = await WhatsAppAccountModel.getActiveAccounts();
+    
+    for (const account of accounts) {
+      if (account.status === 'connected') {
+        try {
+          await this.disconnect(account.phone_number);
+          await this.sleep(2000);
+          await this.initializeSession(account.phone_number, account.user_telegram_id);
+        } catch (error) {
+          logger.error(`Failed to reconnect ${account.phone_number}:`, error);
+        }
+      }
     }
   }
 
