@@ -17,7 +17,10 @@ app.use(express.json());
 
 const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: false });
 
-// Обработка callback запросов
+// ============================================
+// ОБРАБОТЧИКИ CALLBACK ЗАПРОСОВ
+// ============================================
+
 bot.on('callback_query', async (callbackQuery) => {
   const chatId = callbackQuery.message.chat.id;
   const data = callbackQuery.data;
@@ -54,7 +57,6 @@ bot.on('callback_query', async (callbackQuery) => {
           'Введите номер телефона:',
           { parse_mode: 'Markdown' }
         );
-        // Сохраняем состояние
         break;
 
       case data === 'code_method':
@@ -82,17 +84,33 @@ bot.on('callback_query', async (callbackQuery) => {
         break;
 
       case data === 'back_to_menu':
-        await bot.editMessageText(
-          '👋 *Главное меню*\n\nВыберите действие:',
-          {
-            chat_id: chatId,
-            message_id: messageId,
-            parse_mode: 'Markdown',
-            reply_markup: {
-              inline_keyboard: mainMenuKeyboard
+        try {
+          await bot.editMessageText(
+            '👋 *Главное меню*\n\nВыберите действие:',
+            {
+              chat_id: chatId,
+              message_id: messageId,
+              parse_mode: 'Markdown',
+              reply_markup: {
+                inline_keyboard: mainMenuKeyboard
+              }
             }
+          );
+        } catch (error) {
+          if (error.message.includes('message is not modified')) {
+            // Игнорируем
+          } else {
+            await bot.sendMessage(chatId,
+              '👋 *Главное меню*\n\nВыберите действие:',
+              {
+                parse_mode: 'Markdown',
+                reply_markup: {
+                  inline_keyboard: mainMenuKeyboard
+                }
+              }
+            );
           }
-        );
+        }
         break;
 
       case data === 'stats':
@@ -108,7 +126,6 @@ bot.on('callback_query', async (callbackQuery) => {
           '📢 *Рассылка*\n\nВведите сообщение для рассылки:',
           { parse_mode: 'Markdown' }
         );
-        // Сохраняем состояние для рассылки
         break;
 
       case data.startsWith('delete_'):
@@ -189,7 +206,10 @@ bot.on('callback_query', async (callbackQuery) => {
   }
 });
 
-// Обработка текстовых сообщений
+// ============================================
+// ОБРАБОТЧИК ТЕКСТОВЫХ СООБЩЕНИЙ
+// ============================================
+
 bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
   const text = msg.text;
@@ -206,7 +226,10 @@ bot.on('message', async (msg) => {
   }
 });
 
-// Функции обработчики
+// ============================================
+// ФУНКЦИИ ОБРАБОТЧИКИ
+// ============================================
+
 async function handleStart(chatId) {
   const user = await UserModel.create(chatId, 'user');
   
@@ -229,14 +252,14 @@ async function handleStart(chatId) {
 
 async function addPhoneNumber(chatId, phoneNumber) {
   try {
-    // Форматируем номер
     const formatted = formatPhoneNumber(phoneNumber);
     
-    // Проверка лимита
     const accounts = await WhatsAppAccountModel.findByUser(chatId);
-    if (accounts.length >= (process.env.MAX_ACCOUNTS || 10)) {
+    const maxAccounts = parseInt(process.env.MAX_ACCOUNTS) || 10;
+    
+    if (accounts.length >= maxAccounts) {
       await bot.sendMessage(chatId,
-        `⚠️ Достигнут лимит аккаунтов (${process.env.MAX_ACCOUNTS || 10})`,
+        `⚠️ Достигнут лимит аккаунтов (${maxAccounts})`,
         {
           reply_markup: {
             inline_keyboard: [
@@ -248,7 +271,6 @@ async function addPhoneNumber(chatId, phoneNumber) {
       return;
     }
 
-    // Проверка на дубликат
     const existing = await WhatsAppAccountModel.findByPhone(formatted);
     if (existing) {
       await bot.sendMessage(chatId,
@@ -264,10 +286,8 @@ async function addPhoneNumber(chatId, phoneNumber) {
       return;
     }
 
-    // Сохраняем аккаунт
     const account = await WhatsAppAccountModel.create(chatId, formatted);
     
-    // Подключаем сессию
     await whatsappManager.initializeSession(formatted, chatId);
 
     await bot.sendMessage(chatId,
@@ -292,71 +312,76 @@ async function addPhoneNumber(chatId, phoneNumber) {
 }
 
 async function showAccounts(chatId) {
-  const accounts = await WhatsAppAccountModel.findByUser(chatId);
-  
-  if (accounts.length === 0) {
-    await bot.sendMessage(chatId,
-      '📭 *У вас нет добавленных аккаунтов*\n\n' +
-      'Нажмите "➕ Добавить номер" чтобы начать',
-      {
-        parse_mode: 'Markdown',
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: '➕ Добавить номер', callback_data: 'add_account' }],
-            [{ text: '🔙 Назад', callback_data: 'back_to_menu' }]
-          ]
+  try {
+    const accounts = await WhatsAppAccountModel.findByUser(chatId);
+    
+    if (accounts.length === 0) {
+      await bot.sendMessage(chatId,
+        '📭 *У вас нет добавленных аккаунтов*\n\n' +
+        'Нажмите "➕ Добавить номер" чтобы начать',
+        {
+          parse_mode: 'Markdown',
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: '➕ Добавить номер', callback_data: 'add_account' }],
+              [{ text: '🔙 Назад', callback_data: 'back_to_menu' }]
+            ]
+          }
         }
-      }
-    );
-    return;
-  }
-
-  let message = '📋 *Ваши WhatsApp аккаунты:*\n\n';
-  const keyboard = [];
-
-  accounts.forEach((acc, index) => {
-    const statusEmoji = {
-      'pending': '⏳',
-      'connected': '✅',
-      'warming': '🔄',
-      'warmed': '🔥',
-      'disconnected': '❌'
-    }[acc.status] || '❓';
-
-    const statusText = {
-      'pending': 'Ожидание',
-      'connected': 'Подключен',
-      'warming': 'Прогрев...',
-      'warmed': 'Готов',
-      'disconnected': 'Отключен'
-    }[acc.status] || acc.status;
-
-    message += `${index + 1}. ${statusEmoji} \`${acc.phone_number}\`\n`;
-    message += `   📊 Статус: ${statusText}\n`;
-    message += `   📨 Отпр: ${acc.messages_sent} | Пол: ${acc.messages_received}\n`;
-    message += `   ⏰ ${acc.warmup_time}ч | ${acc.warmup_type === 'slow' ? '🐢 Медл' : acc.warmup_type === 'human' ? '👤 Человек' : '🚀 Быстр'}\n\n`;
-
-    keyboard.push([{
-      text: `🗑️ ${acc.phone_number.slice(-6)}`,
-      callback_data: `delete_${acc.phone_number}`
-    }]);
-  });
-
-  message += `\n📊 *Всего:* ${accounts.length}/${process.env.MAX_ACCOUNTS || 10}`;
-
-  // Добавляем кнопки управления
-  keyboard.push(
-    [{ text: '➕ Добавить номер', callback_data: 'add_account' }],
-    [{ text: '🚀 Запустить прогрев', callback_data: 'start_warmup' }],
-    [{ text: '🔙 Назад', callback_data: 'back_to_menu' }]
-  );
-
-  await bot.sendMessage(chatId, message, {
-    parse_mode: 'Markdown',
-    reply_markup: {
-      inline_keyboard: keyboard
+      );
+      return;
     }
-  });
+
+    let message = '📋 *Ваши WhatsApp аккаунты:*\n\n';
+    const keyboard = [];
+
+    accounts.forEach((acc, index) => {
+      const statusMap = {
+        'pending': { emoji: '⏳', text: 'Ожидание' },
+        'connected': { emoji: '✅', text: 'Подключен' },
+        'warming': { emoji: '🔄', text: 'Прогрев...' },
+        'warmed': { emoji: '🔥', text: 'Готов' },
+        'disconnected': { emoji: '❌', text: 'Отключен' }
+      };
+      
+      const status = statusMap[acc.status] || { emoji: '❓', text: acc.status };
+      
+      const typeMap = {
+        'slow': '🐢 Медл',
+        'human': '👤 Человек',
+        'fast': '🚀 Быстр'
+      };
+
+      message += `${index + 1}. ${status.emoji} \`${acc.phone_number}\`\n`;
+      message += `   📊 Статус: ${status.text}\n`;
+      message += `   📨 Отпр: ${acc.messages_sent} | Пол: ${acc.messages_received}\n`;
+      message += `   ⏰ ${acc.warmup_time}ч | ${typeMap[acc.warmup_type] || '👤'}\n\n`;
+
+      keyboard.push([{
+        text: `🗑️ ${acc.phone_number.slice(-6)}`,
+        callback_data: `delete_${acc.phone_number}`
+      }]);
+    });
+
+    message += `\n📊 *Всего:* ${accounts.length}/${process.env.MAX_ACCOUNTS || 10}`;
+
+    keyboard.push(
+      [{ text: '➕ Добавить номер', callback_data: 'add_account' }],
+      [{ text: '🚀 Запустить прогрев', callback_data: 'start_warmup' }],
+      [{ text: '🔙 Назад', callback_data: 'back_to_menu' }]
+    );
+
+    await bot.sendMessage(chatId, message, {
+      parse_mode: 'Markdown',
+      reply_markup: {
+        inline_keyboard: keyboard
+      }
+    });
+
+  } catch (error) {
+    logger.error(`Error showing accounts: ${error.message}`);
+    await bot.sendMessage(chatId, `❌ Ошибка: ${error.message}`);
+  }
 }
 
 async function deleteAccount(chatId, phoneNumber) {
@@ -371,85 +396,98 @@ async function deleteAccount(chatId, phoneNumber) {
     });
 
     await showAccounts(chatId);
+
   } catch (error) {
+    logger.error(`Error deleting account: ${error.message}`);
     await bot.sendMessage(chatId, `❌ Ошибка при удалении: ${error.message}`);
   }
 }
 
 async function startWarmup(chatId) {
-  const accounts = await WhatsAppAccountModel.findByUser(chatId);
-  const activeAccounts = accounts.filter(a => a.status === 'connected');
+  try {
+    const accounts = await WhatsAppAccountModel.findByUser(chatId);
+    const activeAccounts = accounts.filter(a => a.status === 'connected');
 
-  if (activeAccounts.length < 2) {
+    if (activeAccounts.length < 2) {
+      await bot.sendMessage(chatId,
+        '⚠️ *Недостаточно аккаунтов для прогрева*\n\n' +
+        `Требуется минимум 2 аккаунта. У вас: ${activeAccounts.length}\n` +
+        'Добавьте больше аккаунтов и попробуйте снова.',
+        {
+          parse_mode: 'Markdown',
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: '➕ Добавить номер', callback_data: 'add_account' }],
+              [{ text: '🔙 Назад', callback_data: 'back_to_menu' }]
+            ]
+          }
+        }
+      );
+      return;
+    }
+
+    let started = 0;
+    for (const account of activeAccounts) {
+      try {
+        await whatsappManager.initializeSession(account.phone_number, chatId);
+        started++;
+        await new Promise(resolve => setTimeout(resolve, 2000));
+      } catch (error) {
+        logger.error(`Failed to start warmup for ${account.phone_number}:`, error);
+      }
+    }
+
     await bot.sendMessage(chatId,
-      '⚠️ *Недостаточно аккаунтов для прогрева*\n\n' +
-      `Требуется минимум 2 аккаунта. У вас: ${activeAccounts.length}\n` +
-      'Добавьте больше аккаунтов и попробуйте снова.',
+      `✅ *Прогрев запущен*\n\n` +
+      `📱 Активных аккаунтов: ${started}/${activeAccounts.length}\n` +
+      `⏳ Время прогрева: ${activeAccounts[0]?.warmup_time || 6} часов\n` +
+      `🔄 Тип: ${activeAccounts[0]?.warmup_type === 'slow' ? '🐢 Медленно' : activeAccounts[0]?.warmup_type === 'human' ? '👤 Как человек' : '🚀 Быстро'}\n\n` +
+      `📊 Следите за прогрессом в списке аккаунтов.`,
       {
         parse_mode: 'Markdown',
         reply_markup: {
           inline_keyboard: [
-            [{ text: '➕ Добавить номер', callback_data: 'add_account' }],
+            [{ text: '📊 Статус прогрева', callback_data: 'list_accounts' }],
             [{ text: '🔙 Назад', callback_data: 'back_to_menu' }]
           ]
         }
       }
     );
-    return;
-  }
 
-  // Запускаем прогревы для всех аккаунтов
-  let started = 0;
-  for (const account of activeAccounts) {
-    try {
-      await whatsappManager.initializeSession(account.phone_number, chatId);
-      started++;
-      await new Promise(resolve => setTimeout(resolve, 2000));
-    } catch (error) {
-      logger.error(`Failed to start warmup for ${account.phone_number}:`, error);
-    }
+  } catch (error) {
+    logger.error(`Error starting warmup: ${error.message}`);
+    await bot.sendMessage(chatId, `❌ Ошибка: ${error.message}`);
   }
-
-  await bot.sendMessage(chatId,
-    `✅ *Прогрев запущен*\n\n` +
-    `📱 Активных аккаунтов: ${started}/${activeAccounts.length}\n` +
-    `⏳ Время прогрева: ${activeAccounts[0]?.warmup_time || 6} часов\n` +
-    `🔄 Тип: ${activeAccounts[0]?.warmup_type === 'slow' ? '🐢 Медленно' : activeAccounts[0]?.warmup_type === 'human' ? '👤 Как человек' : '🚀 Быстро'}\n\n` +
-    `📊 Следите за прогрессом в списке аккаунтов.`,
-    {
-      parse_mode: 'Markdown',
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: '📊 Статус прогрева', callback_data: 'list_accounts' }],
-          [{ text: '🔙 Назад', callback_data: 'back_to_menu' }]
-        ]
-      }
-    }
-  );
 }
 
 async function showWarmupSettings(chatId) {
-  const accounts = await WhatsAppAccountModel.findByUser(chatId);
-  let currentTime = 6;
-  let currentType = 'human';
-  
-  if (accounts.length > 0) {
-    currentTime = accounts[0].warmup_time || 6;
-    currentType = accounts[0].warmup_type || 'human';
-  }
-
-  await bot.sendMessage(chatId,
-    `⚙️ *Настройки прогрева*\n\n` +
-    `⏰ Текущее время: ${currentTime} часов\n` +
-    `📊 Текущий тип: ${currentType === 'slow' ? '🐢 Медленно' : currentType === 'human' ? '👤 Как человек' : '🚀 Быстро'}\n\n` +
-    `Выберите новые параметры:`,
-    {
-      parse_mode: 'Markdown',
-      reply_markup: {
-        inline_keyboard: warmupMenuKeyboard(currentTime, currentType)
-      }
+  try {
+    const accounts = await WhatsAppAccountModel.findByUser(chatId);
+    let currentTime = 6;
+    let currentType = 'human';
+    
+    if (accounts.length > 0) {
+      currentTime = accounts[0].warmup_time || 6;
+      currentType = accounts[0].warmup_type || 'human';
     }
-  );
+
+    await bot.sendMessage(chatId,
+      `⚙️ *Настройки прогрева*\n\n` +
+      `⏰ Текущее время: ${currentTime} часов\n` +
+      `📊 Текущий тип: ${currentType === 'slow' ? '🐢 Медленно' : currentType === 'human' ? '👤 Как человек' : '🚀 Быстро'}\n\n` +
+      `Выберите новые параметры:`,
+      {
+        parse_mode: 'Markdown',
+        reply_markup: {
+          inline_keyboard: warmupMenuKeyboard(currentTime, currentType)
+        }
+      }
+    );
+
+  } catch (error) {
+    logger.error(`Error showing warmup settings: ${error.message}`);
+    await bot.sendMessage(chatId, `❌ Ошибка: ${error.message}`);
+  }
 }
 
 async function setWarmupTime(chatId, hours) {
@@ -510,7 +548,10 @@ async function setWarmupType(chatId, type) {
   );
 }
 
-// Админ-панель
+// ============================================
+// АДМИН-ПАНЕЛЬ
+// ============================================
+
 async function showAdminPanel(chatId) {
   const user = await UserModel.findByTelegramId(chatId);
   if (!user?.is_admin) {
@@ -569,7 +610,6 @@ async function showAllUsers(chatId) {
 
   let message = '👥 *Все пользователи:*\n\n';
   users.forEach((user, index) => {
-    const accounts = WhatsAppAccountModel.findByUser(user.telegram_id);
     message += `${index + 1}. ${user.username || 'Без имени'} (${user.telegram_id})\n`;
   });
 
@@ -583,7 +623,181 @@ async function showAllUsers(chatId) {
   });
 }
 
-// Настройка webhook
+// ============================================
+// АДМИНСКИЕ КОМАНДЫ ДЛЯ ОЧИСТКИ
+// ============================================
+
+// Команда /clean - очистка папок с сессиями
+bot.onText(/\/clean/, async (msg) => {
+  const chatId = msg.chat.id;
+  
+  try {
+    const user = await UserModel.findByTelegramId(chatId);
+    if (!user?.is_admin) {
+      await bot.sendMessage(chatId, '⛔ У вас нет прав администратора');
+      return;
+    }
+
+    const fs = require('fs');
+    const path = require('path');
+    const sessionManager = require('../whatsapp/session');
+    
+    const sessionsPath = path.join(__dirname, '../../sessions');
+    
+    if (!fs.existsSync(sessionsPath)) {
+      await bot.sendMessage(chatId, '📂 Папка с сессиями не найдена');
+      return;
+    }
+
+    const folders = fs.readdirSync(sessionsPath);
+    
+    if (folders.length === 0) {
+      await bot.sendMessage(chatId, '📂 Папка с сессиями пуста');
+      return;
+    }
+
+    let deleted = 0;
+    for (const folder of folders) {
+      const folderPath = path.join(sessionsPath, folder);
+      try {
+        fs.rmSync(folderPath, { recursive: true, force: true });
+        deleted++;
+      } catch (error) {
+        logger.error(`Failed to delete ${folder}:`, error);
+      }
+    }
+
+    sessionManager.clearCache();
+
+    await bot.sendMessage(chatId, 
+      `✅ *Очистка сессий завершена*\n\n` +
+      `🗑️ Удалено папок: ${deleted}\n` +
+      `📂 Всего папок: ${folders.length}\n\n` +
+      `🔄 Перезапустите сервис на Render для применения изменений.`,
+      { parse_mode: 'Markdown' }
+    );
+
+  } catch (error) {
+    await bot.sendMessage(chatId, `❌ Ошибка: ${error.message}`);
+  }
+});
+
+// Команда /cleandb - очистка базы данных
+bot.onText(/\/cleandb/, async (msg) => {
+  const chatId = msg.chat.id;
+  
+  try {
+    const user = await UserModel.findByTelegramId(chatId);
+    if (!user?.is_admin) {
+      await bot.sendMessage(chatId, '⛔ У вас нет прав администратора');
+      return;
+    }
+
+    const { pool } = require('../database');
+    
+    await pool.query('DELETE FROM whatsapp_accounts');
+    await pool.query('DELETE FROM conversations');
+    await pool.query('DELETE FROM stats');
+    
+    await pool.query('ALTER SEQUENCE whatsapp_accounts_id_seq RESTART WITH 1');
+    await pool.query('ALTER SEQUENCE conversations_id_seq RESTART WITH 1');
+    await pool.query('ALTER SEQUENCE stats_id_seq RESTART WITH 1');
+
+    await bot.sendMessage(chatId,
+      `✅ *База данных полностью очищена*\n\n` +
+      `🗑️ Удалено:\n` +
+      `• Все аккаунты\n` +
+      `• Все диалоги\n` +
+      `• Вся статистика\n\n` +
+      `🔄 Теперь вы можете добавлять новые номера.`,
+      { parse_mode: 'Markdown' }
+    );
+
+  } catch (error) {
+    await bot.sendMessage(chatId, `❌ Ошибка: ${error.message}`);
+  }
+});
+
+// Команда /restart - перезагрузка сервиса
+bot.onText(/\/restart/, async (msg) => {
+  const chatId = msg.chat.id;
+  
+  try {
+    const user = await UserModel.findByTelegramId(chatId);
+    if (!user?.is_admin) {
+      await bot.sendMessage(chatId, '⛔ У вас нет прав администратора');
+      return;
+    }
+
+    await bot.sendMessage(chatId, 
+      '🔄 *Перезагрузка сервиса...*\n\n' +
+      'Очищаем кеш и переподключаем сессии...',
+      { parse_mode: 'Markdown' }
+    );
+
+    const sessionManager = require('../whatsapp/session');
+    sessionManager.clearCache();
+
+    await whatsappManager.reconnectAll();
+
+    await bot.sendMessage(chatId,
+      '✅ *Сервис перезагружен*\n\n' +
+      'Все сессии переподключены.\n' +
+      'Проверьте статус аккаунтов в списке.',
+      { parse_mode: 'Markdown' }
+    );
+
+  } catch (error) {
+    await bot.sendMessage(chatId, `❌ Ошибка: ${error.message}`);
+  }
+});
+
+// Команда /status - показать статус сессий
+bot.onText(/\/status/, async (msg) => {
+  const chatId = msg.chat.id;
+  
+  try {
+    const user = await UserModel.findByTelegramId(chatId);
+    if (!user?.is_admin) {
+      await bot.sendMessage(chatId, '⛔ У вас нет прав администратора');
+      return;
+    }
+
+    const sessionManager = require('../whatsapp/session');
+    
+    const allSessions = sessionManager.getAllSessions();
+    const activeSessions = whatsappManager.getActiveSessions();
+    
+    let message = '📊 *Статус сессий*\n\n';
+    message += `🟢 Активных: ${activeSessions.length}\n`;
+    message += `📁 Всего сессий: ${allSessions.length}\n\n`;
+    
+    if (activeSessions.length > 0) {
+      message += '*Активные:*\n';
+      activeSessions.forEach(num => {
+        message += `✅ ${num}\n`;
+      });
+    }
+    
+    if (allSessions.length > 0) {
+      message += '\n*Все сессии:*\n';
+      allSessions.forEach(s => {
+        const status = activeSessions.includes(s.phoneNumber) ? '✅' : '❌';
+        message += `${status} ${s.phoneNumber}\n`;
+      });
+    }
+
+    await bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
+
+  } catch (error) {
+    await bot.sendMessage(chatId, `❌ Ошибка: ${error.message}`);
+  }
+});
+
+// ============================================
+// НАСТРОЙКА WEBHOOK
+// ============================================
+
 const webhookUrl = process.env.TELEGRAM_WEBHOOK_URL;
 if (process.env.NODE_ENV === 'production' && webhookUrl) {
   bot.setWebHook(webhookUrl)
@@ -591,7 +805,8 @@ if (process.env.NODE_ENV === 'production' && webhookUrl) {
     .catch(err => logger.error('Webhook error:', err));
 }
 
-// Экспортируем для использования в других модулях
+// ============================================
+// ЭКСПОРТ
+// ============================================
+
 module.exports = bot;
-module.exports.showAccounts = showAccounts;
-module.exports.showStats = showStats;
