@@ -3,8 +3,7 @@ const { UserModel, WhatsAppAccountModel, PaymentModel } = require('../database/m
 const whatsappManager = require('../whatsapp/manager');
 const { logger } = require('../utils/logger');
 const { validatePhoneNumber, formatPhoneNumber } = require('../utils/helpers');
-const { getPrices, createInvoice, checkPayment } = require('../payments/cryptobot');
-const { generateMessage } = require('../ai/gemini');
+const { getPrices } = require('../payments/cryptobot');
 const {
   mainMenuKeyboard,
   accountMenuKeyboard,
@@ -19,7 +18,7 @@ require('dotenv').config();
 const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: false });
 
 // ============================================
-// ГЛАВНОЕ МЕНЮ
+// ОБРАБОТЧИК КОМАНДЫ /start
 // ============================================
 
 bot.onText(/\/start/, async (msg) => {
@@ -32,15 +31,13 @@ bot.onText(/\/start/, async (msg) => {
   if (!user) {
     user = await UserModel.create(chatId, username);
     
-    // Обработка рефералки
     if (referralCode) {
       const referrer = await UserModel.findByTelegramId(parseInt(referralCode));
       if (referrer && referrer.telegram_id !== chatId) {
         await UserModel.updateReferrals(chatId, referrer.telegram_id);
         await bot.sendMessage(chatId,
           `🎉 *Вы активировали реферальную ссылку!*\n\n` +
-          `Вы получили +1 час бесплатного прогрева! 🔥\n` +
-          `Ваш реферер тоже получил бонус!`
+          `Вы получили +1 час бесплатного прогрева! 🔥`
         );
       }
     }
@@ -52,8 +49,7 @@ bot.onText(/\/start/, async (msg) => {
   await bot.sendMessage(chatId,
     `👋 *Добро пожаловать в WhatsApp Warmup Bot!*\n\n` +
     `🔥 *Прогрев WhatsApp аккаунтов*\n` +
-    `🤖 Автоматическое общение между аккаунтами\n` +
-    `💬 Естественные диалоги с AI\n\n` +
+    `🤖 Автоматическое общение между аккаунтами\n\n` +
     `📊 *Статистика:*\n` +
     `• Всего аккаунтов: ${stats.total_accounts || 0}\n` +
     `• Активных: ${stats.active || 0}\n` +
@@ -73,7 +69,7 @@ bot.onText(/\/start/, async (msg) => {
 });
 
 // ============================================
-// ОБРАБОТЧИКИ КНОПОК
+// ОБРАБОТЧИКИ CALLBACK
 // ============================================
 
 bot.on('callback_query', async (callbackQuery) => {
@@ -106,17 +102,11 @@ bot.on('callback_query', async (callbackQuery) => {
         break;
 
       case 'qr_method':
-        await bot.sendMessage(chatId,
-          '📱 *Отправьте номер для QR кода:*',
-          { parse_mode: 'Markdown' }
-        );
+        await bot.sendMessage(chatId, '📱 *Отправьте номер для QR кода:*', { parse_mode: 'Markdown' });
         break;
 
       case 'code_method':
-        await bot.sendMessage(chatId,
-          '🔑 *Отправьте номер для 8-значного кода:*',
-          { parse_mode: 'Markdown' }
-        );
+        await bot.sendMessage(chatId, '🔑 *Отправьте номер для 8-значного кода:*', { parse_mode: 'Markdown' });
         break;
 
       case 'list_accounts':
@@ -163,10 +153,6 @@ bot.on('callback_query', async (callbackQuery) => {
         await handlePurchase(chatId, data.replace('buy_', ''));
         break;
 
-      case 'account_settings':
-        await showAccountSettings(chatId);
-        break;
-
       default:
         if (data.startsWith('delete_')) {
           const phone = data.replace('delete_', '');
@@ -205,26 +191,63 @@ bot.on('message', async (msg) => {
 });
 
 // ============================================
-// ОСНОВНЫЕ ФУНКЦИИ
+// ФУНКЦИИ
 // ============================================
 
+// ---- ДОБАВЛЕНИЕ НОМЕРА ----
+async function addPhoneNumber(chatId, phoneNumber) {
+  try {
+    const formatted = formatPhoneNumber(phoneNumber);
+    const accounts = await WhatsAppAccountModel.findByUser(chatId);
+    const maxAccounts = parseInt(process.env.MAX_ACCOUNTS) || 10;
+
+    if (accounts.length >= maxAccounts) {
+      await bot.sendMessage(chatId, `⚠️ Достигнут лимит аккаунтов (${maxAccounts})`);
+      return;
+    }
+
+    const existing = await WhatsAppAccountModel.findByPhone(formatted);
+    if (existing) {
+      await bot.sendMessage(chatId, `❌ Номер ${formatted} уже добавлен`);
+      return;
+    }
+
+    await WhatsAppAccountModel.create(chatId, formatted);
+    await whatsappManager.initializeSession(formatted, chatId);
+
+    await bot.sendMessage(chatId,
+      `✅ Номер ${formatted} успешно добавлен\n\n` +
+      `📱 Ожидайте QR код для подключения...`,
+      { parse_mode: 'Markdown' }
+    );
+  } catch (error) {
+    await bot.sendMessage(chatId, `❌ Ошибка: ${error.message}`);
+  }
+}
+
+// ---- ПОЛУЧЕНИЕ КОДА ----
+async function getPairingCode(chatId, phoneNumber) {
+  try {
+    const code = await whatsappManager.getPairingCode(phoneNumber);
+    await bot.sendMessage(chatId,
+      `🔑 *8-значный код для номера:* \`${phoneNumber}\`\n\n` +
+      `1️⃣ Откройте WhatsApp на телефоне\n` +
+      `2️⃣ Нажмите "Связанные устройства" → "Привязать устройство"\n` +
+      `3️⃣ Выберите "Связать по номеру телефона"\n` +
+      `4️⃣ Введите код: \`${code}\``,
+      { parse_mode: 'Markdown' }
+    );
+  } catch (error) {
+    await bot.sendMessage(chatId, `❌ Ошибка: ${error.message}`);
+  }
+}
+
+// ---- СПИСОК АККАУНТОВ ----
 async function showAccounts(chatId) {
   const accounts = await WhatsAppAccountModel.findByUser(chatId);
 
   if (accounts.length === 0) {
-    await bot.sendMessage(chatId,
-      '📭 *У вас нет добавленных аккаунтов*\n\n' +
-      'Нажмите "➕ Добавить номер" чтобы начать',
-      {
-        parse_mode: 'Markdown',
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: '➕ Добавить номер', callback_data: 'add_account' }],
-            [{ text: '🔙 Назад', callback_data: 'back_to_menu' }]
-          ]
-        }
-      }
-    );
+    await bot.sendMessage(chatId, '📭 *У вас нет добавленных аккаунтов*', { parse_mode: 'Markdown' });
     return;
   }
 
@@ -233,22 +256,16 @@ async function showAccounts(chatId) {
 
   accounts.forEach((acc, index) => {
     const statusMap = {
-      'pending': { emoji: '⏳', text: 'Ожидание' },
-      'connected': { emoji: '✅', text: 'Подключен' },
-      'warming': { emoji: '🔄', text: 'Прогрев...' },
-      'warmed': { emoji: '🔥', text: 'Готов' },
-      'disconnected': { emoji: '❌', text: 'Отключен' }
+      'pending': '⏳ Ожидание',
+      'connected': '✅ Подключен',
+      'warming': '🔄 Прогрев...',
+      'warmed': '🔥 Готов',
+      'disconnected': '❌ Отключен'
     };
 
-    const status = statusMap[acc.status] || { emoji: '❓', text: acc.status };
-    const typeMap = { 'slow': '🐢', 'human': '👤', 'fast': '🚀' };
-
-    message += `${index + 1}. ${status.emoji} \`${acc.phone_number}\`\n`;
-    message += `   📊 ${status.text}\n`;
+    message += `${index + 1}. ${statusMap[acc.status] || '❓'} \`${acc.phone_number}\`\n`;
     message += `   📨 Отпр: ${acc.messages_sent} | Пол: ${acc.messages_received}\n`;
-    message += `   ⏰ ${acc.warmup_time}ч | ${typeMap[acc.warmup_type] || '👤'}\n`;
-    if (acc.custom_name) message += `   📛 Имя: ${acc.custom_name}\n`;
-    message += '\n';
+    message += `   ⏰ ${acc.warmup_time}ч\n\n`;
 
     keyboard.push([{
       text: `🗑️ ${acc.phone_number.slice(-6)}`,
@@ -259,7 +276,6 @@ async function showAccounts(chatId) {
   message += `\n📊 *Всего:* ${accounts.length}/${process.env.MAX_ACCOUNTS || 10}`;
 
   keyboard.push(
-    [{ text: '⚙️ Настройки аккаунтов', callback_data: 'account_settings' }],
     [{ text: '➕ Добавить номер', callback_data: 'add_account' }],
     [{ text: '🔙 Назад', callback_data: 'back_to_menu' }]
   );
@@ -270,99 +286,91 @@ async function showAccounts(chatId) {
   });
 }
 
+// ---- УДАЛЕНИЕ АККАУНТА ----
+async function deleteAccount(chatId, phoneNumber) {
+  try {
+    await whatsappManager.disconnect(phoneNumber);
+    await WhatsAppAccountModel.delete(phoneNumber, chatId);
+    await bot.sendMessage(chatId, `✅ Аккаунт ${phoneNumber} удален`);
+    await showAccounts(chatId);
+  } catch (error) {
+    await bot.sendMessage(chatId, `❌ Ошибка: ${error.message}`);
+  }
+}
+
+// ---- НАСТРОЙКИ ПРОГРЕВА ----
+async function showWarmupSettings(chatId) {
+  const accounts = await WhatsAppAccountModel.findByUser(chatId);
+  let currentTime = 6;
+  let currentType = 'human';
+  
+  if (accounts.length > 0) {
+    currentTime = accounts[0].warmup_time || 6;
+    currentType = accounts[0].warmup_type || 'human';
+  }
+
+  await bot.sendMessage(chatId,
+    `⚙️ *Настройки прогрева*\n\n` +
+    `⏰ Текущее время: ${currentTime} часов\n` +
+    `📊 Текущий тип: ${currentType === 'slow' ? '🐢 Медленно' : currentType === 'human' ? '👤 Как человек' : '🚀 Быстро'}\n\n` +
+    `Выберите новые параметры:`,
+    {
+      parse_mode: 'Markdown',
+      reply_markup: {
+        inline_keyboard: warmupMenuKeyboard(currentTime, currentType)
+      }
+    }
+  );
+}
+
+async function setWarmupTime(chatId, hours) {
+  const accounts = await WhatsAppAccountModel.findByUser(chatId);
+  for (const acc of accounts) {
+    await WhatsAppAccountModel.updateWarmupSettings(acc.phone_number, hours, acc.warmup_type);
+  }
+  await bot.sendMessage(chatId, `✅ *Время прогрева установлено: ${hours} часов*`, { parse_mode: 'Markdown' });
+}
+
+async function setWarmupType(chatId, type) {
+  const typeLabels = { 'slow': '🐢 Медленно', 'human': '👤 Как человек', 'fast': '🚀 Быстро' };
+  const accounts = await WhatsAppAccountModel.findByUser(chatId);
+  for (const acc of accounts) {
+    await WhatsAppAccountModel.updateWarmupSettings(acc.phone_number, acc.warmup_time, type);
+  }
+  await bot.sendMessage(chatId, `✅ *Тип прогрева установлен: ${typeLabels[type]}*`, { parse_mode: 'Markdown' });
+}
+
+// ---- ОПЦИИ ПРОГРЕВА ----
 async function showWarmupOptions(chatId) {
-  const user = await UserModel.findByTelegramId(chatId);
   const accounts = await WhatsAppAccountModel.findByUser(chatId);
   const connected = accounts.filter(a => a.status === 'connected');
 
   if (connected.length < 2) {
     await bot.sendMessage(chatId,
-      `⚠️ *Недостаточно аккаунтов*\n\n` +
-      `Требуется минимум 2 аккаунта. У вас: ${connected.length}\n` +
-      `Добавьте больше аккаунтов и попробуйте снова.`,
-      {
-        parse_mode: 'Markdown',
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: '➕ Добавить номер', callback_data: 'add_account' }],
-            [{ text: '🔙 Назад', callback_data: 'back_to_menu' }]
-          ]
-        }
-      }
+      `⚠️ *Недостаточно аккаунтов*\n\nТребуется минимум 2 аккаунта. У вас: ${connected.length}`,
+      { parse_mode: 'Markdown' }
     );
     return;
   }
 
   const prices = getPrices();
-
-  let message = '💰 *Выберите время прогрева*\n\n';
-  message += `👤 Аккаунтов: ${connected.length}\n`;
-  message += `🎁 Бонусные часы: ${user.bonus_hours || 0}ч\n\n`;
-  message += `⏰ 6 часов — $${prices[6]}\n`;
-  message += `⏰ 12 часов — $${prices[12]}\n`;
-  message += `⏰ 24 часа — $${prices[24]}\n\n`;
-  message += `🎯 *Первый прогресс 6 часов БЕСПЛАТНО!*`;
-
-  await bot.sendMessage(chatId, message, {
-    parse_mode: 'Markdown',
-    reply_markup: {
-      inline_keyboard: pricingKeyboard
-    }
-  });
-}
-
-async function showPricing(chatId) {
-  const prices = getPrices();
-
   await bot.sendMessage(chatId,
-    `💰 *Цены на прогрев*\n\n` +
+    `💰 *Выберите время прогрева*\n\n` +
+    `👤 Аккаунтов: ${connected.length}\n\n` +
     `⏰ 6 часов — $${prices[6]}\n` +
     `⏰ 12 часов — $${prices[12]}\n` +
     `⏰ 24 часа — $${prices[24]}\n\n` +
-    `💳 *Оплата через @CryptoBot*\n` +
-    `Поддерживаются: BTC, USDT, TON, TRX\n\n` +
-    `🎁 *Первый раз 6 часов БЕСПЛАТНО!*\n` +
-    `📢 *Приглашай друзей и получай бонусы!*`,
+    `🎯 *Первый прогресс 6 часов БЕСПЛАТНО!*`,
     {
       parse_mode: 'Markdown',
       reply_markup: {
-        inline_keyboard: [
-          [{ text: '💳 Купить', callback_data: 'start_warmup' }],
-          [{ text: '🔙 Назад', callback_data: 'back_to_menu' }]
-        ]
+        inline_keyboard: pricingKeyboard
       }
     }
   );
 }
 
-async function showReferral(chatId) {
-  const user = await UserModel.findByTelegramId(chatId);
-  const referrals = await UserModel.getReferrals(chatId);
-  const refLink = `https://t.me/${(await bot.getMe()).username}?start=${chatId}`;
-
-  await bot.sendMessage(chatId,
-    `📢 *Реферальная программа*\n\n` +
-    `👥 Приглашай друзей и получай бонусы!\n\n` +
-    `🔗 *Твоя реферальная ссылка:*\n` +
-    `\`${refLink}\`\n\n` +
-    `🎁 *За каждого приглашенного:*\n` +
-    `• Ты получаешь +1 час прогрева\n` +
-    `• Друг получает +1 час прогрева\n\n` +
-    `👥 Приглашено: ${referrals.length} человек\n` +
-    `🎁 Бонусных часов: ${user.bonus_hours || 0}ч\n\n` +
-    `📊 *Твои рефералы:*\n${referrals.map(r => `• @${r.username || r.telegram_id}`).join('\n') || 'Пока никого нет'}`,
-    {
-      parse_mode: 'Markdown',
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: '📋 Список аккаунтов', callback_data: 'list_accounts' }],
-          [{ text: '🔙 Назад', callback_data: 'back_to_menu' }]
-        ]
-      }
-    }
-  );
-}
-
+// ---- ПОКУПКА ----
 async function handlePurchase(chatId, hours) {
   const user = await UserModel.findByTelegramId(chatId);
 
@@ -372,9 +380,7 @@ async function handlePurchase(chatId, hours) {
 
   if (hasFree) {
     await bot.sendMessage(chatId,
-      `🎉 *Поздравляю!*\n\n` +
-      `Это ваш первый прогрев — 6 часов БЕСПЛАТНО! 🔥\n\n` +
-      `Прогрев начнется автоматически.`,
+      `🎉 *Поздравляю!*\n\nЭто ваш первый прогрев — 6 часов БЕСПЛАТНО! 🔥`,
       { parse_mode: 'Markdown' }
     );
     await startWarmup(chatId, 6);
@@ -385,41 +391,21 @@ async function handlePurchase(chatId, hours) {
   if (user.bonus_hours >= parseInt(hours)) {
     await UserModel.addBonusHours(chatId, -parseInt(hours));
     await bot.sendMessage(chatId,
-      `🎁 *Использованы бонусные часы!*\n\n` +
-      `Вы использовали ${hours} бонусных часов.\n` +
-      `Осталось: ${user.bonus_hours - parseInt(hours)}ч\n\n` +
-      `Прогрев начнется автоматически.`,
+      `🎁 *Использованы бонусные часы!*\n\nОсталось: ${user.bonus_hours - parseInt(hours)}ч`,
       { parse_mode: 'Markdown' }
     );
     await startWarmup(chatId, parseInt(hours));
     return;
   }
 
-  // Создание инвойса
-  try {
-    const invoice = await createInvoice(chatId, hours);
-    await bot.sendMessage(chatId,
-      `💳 *Оплата*\n\n` +
-      `Сумма: $${invoice.amount}\n` +
-      `Время: ${hours} часов\n\n` +
-      `Оплатите по ссылке:\n` +
-      `${invoice.pay_url}\n\n` +
-      `⏳ После оплаты нажмите "Проверить оплату"`,
-      {
-        parse_mode: 'Markdown',
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: '✅ Проверить оплату', callback_data: `check_payment_${invoice.id}` }],
-            [{ text: '🔙 Назад', callback_data: 'back_to_menu' }]
-          ]
-        }
-      }
-    );
-  } catch (error) {
-    await bot.sendMessage(chatId, `❌ Ошибка создания платежа: ${error.message}`);
-  }
+  await bot.sendMessage(chatId,
+    `💳 *Оплата*\n\nСумма: $${getPrices()[hours]}\nВремя: ${hours} часов\n\n` +
+    `Оплата через @CryptoBot (в разработке)`,
+    { parse_mode: 'Markdown' }
+  );
 }
 
+// ---- ЗАПУСК ПРОГРЕВА ----
 async function startWarmup(chatId, hours) {
   const accounts = await WhatsAppAccountModel.findByUser(chatId);
   const connected = accounts.filter(a => a.status === 'connected');
@@ -430,36 +416,41 @@ async function startWarmup(chatId, hours) {
   }
 
   await bot.sendMessage(chatId,
-    `✅ *Прогрев запущен на ${hours} часов!*\n\n` +
-    `📱 Аккаунтов: ${connected.length}\n` +
-    `⏰ Время: ${hours} часов\n` +
-    `🔄 Аккаунты начали общаться!\n\n` +
-    `📊 Следите за прогрессом в списке аккаунтов.`,
+    `✅ *Прогрев запущен на ${hours} часов!*\n\n📱 Аккаунтов: ${connected.length}\n🔄 Аккаунты начали общаться!`,
     { parse_mode: 'Markdown' }
   );
 }
 
-async function showAccountSettings(chatId) {
-  const accounts = await WhatsAppAccountModel.findByUser(chatId);
+// ---- РЕФЕРАЛКА ----
+async function showReferral(chatId) {
+  const user = await UserModel.findByTelegramId(chatId);
+  const referrals = await UserModel.getReferrals(chatId);
+  const botInfo = await bot.getMe();
+  const refLink = `https://t.me/${botInfo.username}?start=${chatId}`;
 
   await bot.sendMessage(chatId,
-    `⚙️ *Настройки аккаунтов*\n\n` +
-    `Выберите аккаунт для настройки:`,
-    {
-      parse_mode: 'Markdown',
-      reply_markup: {
-        inline_keyboard: accounts.map(acc => [
-          { text: `📱 ${acc.phone_number}`, callback_data: `settings_acc_${acc.phone_number}` }
-        ]).concat([[{ text: '🔙 Назад', callback_data: 'list_accounts' }]])
-      }
-    }
+    `📢 *Реферальная программа*\n\n` +
+    `🔗 *Твоя ссылка:*\n\`${refLink}\`\n\n` +
+    `👥 Приглашено: ${referrals.length}\n` +
+    `🎁 Бонусов: ${user.bonus_hours || 0}ч`,
+    { parse_mode: 'Markdown' }
   );
 }
 
-// ============================================
-// АДМИН-ПАНЕЛЬ
-// ============================================
+// ---- ЦЕНЫ ----
+async function showPricing(chatId) {
+  const prices = getPrices();
+  await bot.sendMessage(chatId,
+    `💰 *Цены на прогрев*\n\n` +
+    `⏰ 6 часов — $${prices[6]}\n` +
+    `⏰ 12 часов — $${prices[12]}\n` +
+    `⏰ 24 часа — $${prices[24]}\n\n` +
+    `💳 *Оплата через @CryptoBot*`,
+    { parse_mode: 'Markdown' }
+  );
+}
 
+// ---- АДМИН-ПАНЕЛЬ ----
 async function showAdminPanel(chatId) {
   const user = await UserModel.findByTelegramId(chatId);
   if (!user?.is_admin) {
@@ -468,26 +459,13 @@ async function showAdminPanel(chatId) {
   }
 
   const stats = await WhatsAppAccountModel.getStats();
-  const userStats = await UserModel.getStats();
-  const paymentStats = await PaymentModel.getStats();
-
   await bot.sendMessage(chatId,
     `⚙️ *Админ-панель*\n\n` +
-    `📊 *Общая статистика:*\n` +
-    `👥 Пользователей: ${userStats.total_users || 0}\n` +
     `📱 Аккаунтов: ${stats.total_accounts || 0}\n` +
     `✅ Активных: ${stats.active || 0}\n` +
     `📤 Отправлено: ${stats.total_sent || 0}\n` +
-    `📥 Получено: ${stats.total_received || 0}\n` +
-    `💳 Платежей: ${paymentStats.total_payments || 0}\n` +
-    `💰 Доход: $${paymentStats.total_revenue || 0}\n\n` +
-    `Выберите действие:`,
-    {
-      parse_mode: 'Markdown',
-      reply_markup: {
-        inline_keyboard: adminKeyboard
-      }
-    }
+    `📥 Получено: ${stats.total_received || 0}`,
+    { parse_mode: 'Markdown' }
   );
 }
 
