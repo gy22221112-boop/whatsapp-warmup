@@ -1,9 +1,9 @@
-require('dotenv').config();
-const { logger } = require('../utils/logger');  // ✅ Правильно
-const { initDatabase } = require('./database');
-const whatsappManager = require('./whatsapp/manager');
-const webhookServer = require('./webhook/server');
-const { pool } = require('./database');
+const TelegramBot = require('node-telegram-bot-api');
+const { UserModel, WhatsAppAccountModel } = require('../database/models');  // ✅
+const whatsappManager = require('../whatsapp/manager');                     // ✅
+const { logger } = require('../utils/logger');                              // ✅
+const { validatePhoneNumber, formatPhoneNumber } = require('../utils/helpers'); // ✅
+const { mainMenuKeyboard, accountMenuKeyboard, warmupMenuKeyboard, adminKeyboard } = require('./keyboards');
 
 // ============================================
 // ПРОВЕРКА ПЕРЕМЕННЫХ ОКРУЖЕНИЯ
