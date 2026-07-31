@@ -1,5 +1,5 @@
 require('dotenv').config();
-const { logger } = require('./utils/logger');
+const { logger } = require('../utils/logger');  // ✅ Правильно
 const { initDatabase } = require('./database');
 const whatsappManager = require('./whatsapp/manager');
 const webhookServer = require('./webhook/server');
